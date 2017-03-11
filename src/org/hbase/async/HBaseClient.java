@@ -131,7 +131,8 @@ public class HBaseClient {
       .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE);
     pool = new ConnectionPoolConfigurationImpl("MyConnectionPool")
       .setPort(config.getInt("assynccassandra.port"))
-      .setMaxConnsPerHost(1)
+      .setMaxConnsPerHost(5)
+      .setConnectTimeout(10000)
       .setSeeds(config.getString("asynccassandra.seeds"));
     monitor = new CountingConnectionPoolMonitor();
     
