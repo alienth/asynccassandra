@@ -35,6 +35,7 @@ import com.netflix.astyanax.model.Column;
 import com.netflix.astyanax.model.ColumnFamily;
 import com.netflix.astyanax.model.ColumnList;
 import com.netflix.astyanax.model.ColumnMap;
+import com.netflix.astyanax.model.ConsistencyLevel;
 import com.netflix.astyanax.query.RowQuery;
 import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
 import com.netflix.astyanax.retry.BoundedExponentialBackoff;
@@ -140,6 +141,7 @@ public class HBaseClient {
 
     ast_config = new AstyanaxConfigurationImpl()      
       .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
+      .setDefaultWriteConsistencyLevel(ConsistencyLevel.CL_ANY)
       .setAsyncExecutor(
           Executors.newFixedThreadPool(num_workers, new ThreadFactoryBuilder().setDaemon(true)
               .setNameFormat("AstyanaxAsync-%d")
