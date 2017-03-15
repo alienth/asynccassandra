@@ -146,7 +146,7 @@ public class HBaseClient {
               .build()));
     pool = new ConnectionPoolConfigurationImpl("MyConnectionPool")
       .setPort(config.getInt("assynccassandra.port"))
-      .setMaxConnsPerHost(1)
+      .setMaxConnsPerHost(config.getInt("asynccassandra.max_conns_per_host"))
       .setSeeds(config.getString("asynccassandra.seeds"));
     monitor = new CountingConnectionPoolMonitor();
     
