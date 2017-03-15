@@ -626,7 +626,7 @@ public class HBaseClient {
           LOG.warn("Context wasn't null for new keyspace " + Bytes.pretty(table));
         }
         context = new AstyanaxContext.Builder()
-          .forCluster("localhost")
+          .forCluster(config.getString("asynccassandra.cluster"))
           .forKeyspace(new String(table))
           .withAstyanaxConfiguration(ast_config)
           .withConnectionPoolConfiguration(pool)

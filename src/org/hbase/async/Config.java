@@ -346,6 +346,7 @@ public class Config {
     
     default_map.put("asynccassandra.port", "9160");
     default_map.put("asynccassandra.max_conns_per_host", "16");
+    default_map.put("asynccassandra.cluster", "localhost");
     
     for (Map.Entry<String, String> entry : default_map.entrySet()) {
       if (!properties.containsKey(entry.getKey()))
