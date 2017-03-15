@@ -20,6 +20,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.netflix.astyanax.AstyanaxContext;
 import com.netflix.astyanax.ColumnListMutation;
 import com.netflix.astyanax.Keyspace;
@@ -133,8 +134,16 @@ public class HBaseClient {
           "Missing required config 'asynccassandra.seeds'");
     }
     
+    final int num_workers = config.hasProperty("asynccassandra.workers.size") ?
+        config.getInt("asynccassandra.workers.size") :
+          Runtime.getRuntime().availableProcessors() * 2;
+
     ast_config = new AstyanaxConfigurationImpl()      
-      .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE);
+      .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
+      .setAsyncExecutor(
+          Executors.newFixedThreadPool(num_workers, new ThreadFactoryBuilder().setDaemon(true)
+              .setNameFormat("AstyanaxAsync-%d")
+              .build()));
     pool = new ConnectionPoolConfigurationImpl("MyConnectionPool")
       .setPort(config.getInt("asynccassandra.port"))
       .setMaxConnsPerHost(1)
