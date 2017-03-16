@@ -26,8 +26,10 @@
  */
 package org.hbase.async;
 
+import java.lang.Thread;
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
@@ -165,6 +167,9 @@ public final class Scanner implements Runnable {
    * @see #setMaxNumBytes
    */
   private long max_num_bytes = ~HBaseRpc.MAX_BYTE_ARRAY_MASK;
+
+  /* The last row fetched by the scanner */
+  private ArrayList<KeyValue> last_row;
 
   /**
    * How many versions of each cell to retrieve.
@@ -827,17 +832,15 @@ public final class Scanner implements Runnable {
           "Can't scan cassandra without a column family: " + this));
       return;
     }
-    if (iterator == null) {
-      try {
-        final OperationResult<Rows<byte[], byte[]>> results = 
-            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-          .withCaching(populate_blockcache)
-          .getRowRange(start_key, stop_key, null, null, Integer.MAX_VALUE).execute();
-        iterator = results.getResult().iterator();
-      } catch (ConnectionException e) {
-        deferred.callback(e);
-        return;
-      }
+    try {
+      final OperationResult<Rows<byte[], byte[]>> results =
+          keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
+        .withCaching(populate_blockcache)
+        .getRowRange(start_key, stop_key, null, null, max_num_rows).execute();
+      iterator = results.getResult().iterator();
+    } catch (ConnectionException e) {
+      deferred.callback(e);
+      return;
     }
     
     if (!iterator.hasNext()) {
@@ -851,7 +854,7 @@ public final class Scanner implements Runnable {
         new ArrayList<ArrayList<KeyValue>>();
     
     int kv_count = 0;
-    while (rows.size() < max_num_rows && iterator.hasNext()) {
+    while (iterator.hasNext()) {
       final Row<byte[], byte[]> result = iterator.next();
       if (filter != null) {
         // TODO - post filtering SUCKS!!!!!
@@ -871,6 +874,14 @@ public final class Scanner implements Runnable {
       }
       rows.add(row);
       kv_count += row.size();
+    }
+    if (rows.get(rows.size() - 1).equals(last_row)) {
+      // we're done
+      deferred.callback(null);
+      return;
+    } else {
+      last_row = rows.get(rows.size() - 1);
+      start_key = last_row.get(0).key();
     }
     deferred.callback(rows);
   }
