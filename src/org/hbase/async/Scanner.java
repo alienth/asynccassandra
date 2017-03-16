@@ -827,18 +827,16 @@ public final class Scanner implements Runnable {
           "Can't scan cassandra without a column family: " + this));
       return;
     }
-    if (iterator == null) {
       try {
         final OperationResult<Rows<byte[], byte[]>> results = 
             keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
           .withCaching(populate_blockcache)
-          .getRowRange(start_key, stop_key, null, null, Integer.MAX_VALUE).execute();
+          .getRowRange(start_key, stop_key, null, null, max_num_rows).execute();
         iterator = results.getResult().iterator();
       } catch (ConnectionException e) {
         deferred.callback(e);
         return;
       }
-    }
     
     if (!iterator.hasNext()) {
       deferred.callback(null);
@@ -871,6 +869,7 @@ public final class Scanner implements Runnable {
       }
       rows.add(row);
       kv_count += row.size();
+      this.start_key = result.getKey();
     }
     deferred.callback(rows);
   }
