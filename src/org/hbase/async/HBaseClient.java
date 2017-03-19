@@ -94,6 +94,8 @@ public class HBaseClient {
 
   final AstyanaxContext<Keyspace> context;
   final Keyspace keyspace;
+
+  MutationBatch buffered_mutations;
   
   final byte[] tsdb_table;
   final byte[] tsdb_uid_table;
@@ -263,14 +265,30 @@ public class HBaseClient {
   }
   
   public Deferred<Object> put(final PutRequest request) {
-    num_puts.incrementAndGet();
-    // TODO how do we batch?
     final Deferred<Object> deferred = new Deferred<Object>();
     final MutationBatch mutation = keyspace.prepareMutationBatch();
-    
-    // TODO - all quals and values 
     mutation.withRow(column_family_schemas.get(request.family), request.key)
       .putColumn(request.qualifier(), request.value());
+    synchronized (buffered_mutations) {
+      if (buffered_mutations == null) {
+        buffered_mutations = keyspace.prepareMutationBatch();
+      }
+      buffered_mutations.mergeShallow(mutation);
+      if (buffered_mutations.getRowCount() >= config.getInt("hbase.rpcs.batch.size")) {
+        final MutationBatch putBatch = buffered_mutations;
+        buffered_mutations = null;
+        return putInternal(putBatch);
+      } else {
+        deferred.callback(null);
+      }
+    }
+
+    return deferred;
+  }
+
+  public Deferred<Object> putInternal(final MutationBatch mutation) {
+    num_puts.incrementAndGet();
+    final Deferred<Object> deferred = new Deferred<Object>();
     try {
       final ListenableFuture<OperationResult<Void>> future = mutation.executeAsync();
       
