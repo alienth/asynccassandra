@@ -163,6 +163,7 @@ public class HBaseClient {
 
     keyspace = context.getClient();
     context.start();
+    buffered_mutations = keyspace.prepareMutationBatch();
     
     tsdb_table = config.getString("tsd.storage.hbase.data_table").getBytes();
     tsdb_uid_table = config.getString("tsd.storage.hbase.uid_table").getBytes();
@@ -264,26 +265,21 @@ public class HBaseClient {
     return deferred;
   }
   
+
   public Deferred<Object> put(final PutRequest request) {
-    final Deferred<Object> deferred = new Deferred<Object>();
     final MutationBatch mutation = keyspace.prepareMutationBatch();
     mutation.withRow(column_family_schemas.get(request.family), request.key)
       .putColumn(request.qualifier(), request.value());
     synchronized (buffered_mutations) {
-      if (buffered_mutations == null) {
-        buffered_mutations = keyspace.prepareMutationBatch();
-      }
       buffered_mutations.mergeShallow(mutation);
       if (buffered_mutations.getRowCount() >= config.getInt("hbase.rpcs.batch.size")) {
         final MutationBatch putBatch = buffered_mutations;
-        buffered_mutations = null;
+        buffered_mutations = keyspace.prepareMutationBatch();
         return putInternal(putBatch);
       } else {
-        deferred.callback(null);
+        return Deferred.fromResult(null);
       }
     }
-
-    return deferred;
   }
 
   public Deferred<Object> putInternal(final MutationBatch mutation) {
