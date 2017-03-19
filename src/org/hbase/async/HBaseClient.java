@@ -151,6 +151,7 @@ public class HBaseClient {
     pool = new ConnectionPoolConfigurationImpl("MyConnectionPool")
       .setPort(config.getInt("asynccassandra.port"))
       .setMaxConnsPerHost(config.getInt("asynccassandra.max_conns_per_host"))
+      .setSocketTimeout(60000)
       .setSeeds(config.getString("asynccassandra.seeds"));
     monitor = new CountingConnectionPoolMonitor();
     context = new AstyanaxContext.Builder()
