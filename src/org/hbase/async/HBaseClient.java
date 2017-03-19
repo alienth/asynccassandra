@@ -85,15 +85,15 @@ public class HBaseClient {
   final ListeningExecutorService service = 
       MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(25));
   
-  final ByteMap<AstyanaxContext<Keyspace>> contexts = 
-      new ByteMap<AstyanaxContext<Keyspace>>();
-  final ByteMap<Keyspace> keyspaces = new ByteMap<Keyspace>();
   final ByteMap<ColumnFamily<byte[], byte[]>> column_family_schemas = 
       new ByteMap<ColumnFamily<byte[], byte[]>>();
   
   final AstyanaxConfigurationImpl ast_config;
   final ConnectionPoolConfigurationImpl pool;
   final CountingConnectionPoolMonitor monitor;
+
+  final AstyanaxContext<Keyspace> context;
+  final Keyspace keyspace;
   
   final byte[] tsdb_table;
   final byte[] tsdb_uid_table;
@@ -151,6 +151,16 @@ public class HBaseClient {
       .setMaxConnsPerHost(config.getInt("asynccassandra.max_conns_per_host"))
       .setSeeds(config.getString("asynccassandra.seeds"));
     monitor = new CountingConnectionPoolMonitor();
+    context = new AstyanaxContext.Builder()
+      .forCluster(config.getString("asynccassandra.cluster"))
+      .forKeyspace(config.getString("asynccassandra.keyspace"))
+      .withAstyanaxConfiguration(ast_config)
+      .withConnectionPoolConfiguration(pool)
+      .withConnectionPoolMonitor(monitor)
+      .buildKeyspace(ThriftFamilyFactory.getInstance());
+
+    keyspace = context.getClient();
+    context.start();
     
     tsdb_table = config.getString("tsd.storage.hbase.data_table").getBytes();
     tsdb_uid_table = config.getString("tsd.storage.hbase.uid_table").getBytes();
@@ -166,7 +176,6 @@ public class HBaseClient {
   
   public Deferred<ArrayList<KeyValue>> get(final GetRequest request) {
     num_gets.incrementAndGet();
-    final Keyspace keyspace = getContext(request.table);
     if (request.family() == null) {
       throw new UnsupportedOperationException(
           "Can't scan cassandra without a column family: " + request);
@@ -256,7 +265,6 @@ public class HBaseClient {
   public Deferred<Object> put(final PutRequest request) {
     num_puts.incrementAndGet();
     // TODO how do we batch?
-    final Keyspace keyspace = getContext(request.table);
     final Deferred<Object> deferred = new Deferred<Object>();
     final MutationBatch mutation = keyspace.prepareMutationBatch();
     
@@ -312,7 +320,6 @@ public class HBaseClient {
   public Deferred<Object> delete(final DeleteRequest request) {
     num_deletes.incrementAndGet();
     // TODO how do we batch?
-    final Keyspace keyspace = getContext(request.table);
     final Deferred<Object> deferred = new Deferred<Object>();
     final MutationBatch mutation = keyspace.prepareMutationBatch();
     
@@ -355,7 +362,6 @@ public class HBaseClient {
           "Increments are not supported on other tables yet"));
     }
     
-    final Keyspace keyspace = getContext(edit.table);
     final ColumnFamily<byte[], String> cf = 
         Bytes.memcmp("id".getBytes(), edit.family) == 0 ? 
             TSDB_UID_ID_CAS : TSDB_UID_NAME_CAS;
@@ -408,7 +414,6 @@ public class HBaseClient {
           "Increments are not supported on other tables yet"));
     }
     
-    final Keyspace keyspace = getContext(request.table);
     ColumnPrefixDistributedRowLock<byte[]> lock = 
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, 
             TSDB_UID_ID_CAS, request.key)
@@ -496,7 +501,7 @@ public class HBaseClient {
   
   public Scanner newScanner(final byte[] table) {
     num_scanners_opened.incrementAndGet();
-    return new Scanner(this, executor, table, getContext(table));
+    return new Scanner(this, executor, table, keyspace);
   }
   
   public Scanner newScanner(final String table) {
@@ -522,9 +527,7 @@ public class HBaseClient {
   public Deferred<Object> shutdown() {
     try {
       // TODO - flag to prevent rpcs while shutting down
-      for (final AstyanaxContext<Keyspace> context : contexts.values()) {
-        context.shutdown();
-      }
+      context.shutdown();
       executor.shutdown();
     } catch (Exception e) {
       LOG.error("failed to close the contexts", e);
@@ -617,33 +620,6 @@ public class HBaseClient {
   }
   
   
-  private Keyspace getContext(final byte[] table) {
-    Keyspace keyspace = keyspaces.get(table);
-    if (keyspace == null) {
-      synchronized (keyspaces) {
-        // avoid race conditions where another thread put the client
-        keyspace = keyspaces.get(table);
-        AstyanaxContext<Keyspace> context = contexts.get(table);
-        if (context != null) {
-          LOG.warn("Context wasn't null for new keyspace " + Bytes.pretty(table));
-        }
-        context = new AstyanaxContext.Builder()
-          .forCluster(config.getString("asynccassandra.cluster"))
-          .forKeyspace(new String(table))
-          .withAstyanaxConfiguration(ast_config)
-          .withConnectionPoolConfiguration(pool)
-          .withConnectionPoolMonitor(monitor)
-          .buildKeyspace(ThriftFamilyFactory.getInstance());
-        contexts.put(table, context);
-        context.start();
-        
-        keyspace = context.getClient();
-        keyspaces.put(table, keyspace);
-      }
-    }
-    return keyspace;
-  }
-
   void incrementScans(){
     num_scans.incrementAndGet();
   }

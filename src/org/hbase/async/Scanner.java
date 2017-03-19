@@ -875,7 +875,7 @@ public final class Scanner implements Runnable {
       rows.add(row);
       kv_count += row.size();
     }
-    if (rows.size == 0 || (rows.get(rows.size() - 1).equals(last_row))) {
+    if (rows.size() == 0 || (rows.get(rows.size() - 1).equals(last_row))) {
       // we're done
       deferred.callback(null);
       return;
