@@ -153,6 +153,9 @@ public class HBaseClient {
       .setMaxConnsPerHost(config.getInt("asynccassandra.max_conns_per_host"))
       .setSocketTimeout(60000)
       .setSeeds(config.getString("asynccassandra.seeds"));
+    if (config.hasProperty("asynccassandra.datacenter")) {
+      pool.setLocalDatacenter(config.getString("asynccassandra.datacenter"));
+    }
     monitor = new CountingConnectionPoolMonitor();
     context = new AstyanaxContext.Builder()
       .forCluster(config.getString("asynccassandra.cluster"))
