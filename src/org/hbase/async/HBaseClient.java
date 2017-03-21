@@ -96,6 +96,7 @@ public class HBaseClient {
   final Keyspace keyspace;
 
   MutationBatch buffered_mutations;
+  private final AtomicLong buffer_count = new AtomicLong();
   
   final byte[] tsdb_table;
   final byte[] tsdb_uid_table;
@@ -276,7 +277,9 @@ public class HBaseClient {
       .putColumn(request.qualifier(), request.value());
     synchronized (buffered_mutations) {
       buffered_mutations.mergeShallow(mutation);
-      if (buffered_mutations.getRowCount() >= config.getInt("hbase.rpcs.batch.size")) {
+      final long count = buffer_count.incrementAndGet();
+      if (count >= config.getInt("hbase.rpcs.batch.size")) {
+        buffer_count.set(0);
         final MutationBatch putBatch = buffered_mutations;
         buffered_mutations = keyspace.prepareMutationBatch();
         return putInternal(putBatch);
