@@ -41,8 +41,11 @@ import com.netflix.astyanax.Keyspace;
 import com.netflix.astyanax.connectionpool.OperationResult;
 import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
 import com.netflix.astyanax.model.Column;
+import com.netflix.astyanax.model.ColumnList;
 import com.netflix.astyanax.model.Row;
 import com.netflix.astyanax.model.Rows;
+import com.netflix.astyanax.query.RowQuery;
+import com.netflix.astyanax.util.RangeBuilder;
 import com.stumbleupon.async.Deferred;
 
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
@@ -836,7 +839,7 @@ public final class Scanner implements Runnable {
       final OperationResult<Rows<byte[], byte[]>> results =
           keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
         .withCaching(populate_blockcache)
-        .getRowRange(start_key, stop_key, null, null, max_num_rows).execute();
+        .getKeyRange(start_key, stop_key, null, null, max_num_rows).execute();
       iterator = results.getResult().iterator();
     } catch (ConnectionException e) {
       deferred.callback(e);
@@ -852,7 +855,7 @@ public final class Scanner implements Runnable {
     // dunno how to size this since we don't have the low level deets
     final ArrayList<ArrayList<KeyValue>> rows =
         new ArrayList<ArrayList<KeyValue>>();
-    
+
     int kv_count = 0;
     while (iterator.hasNext()) {
       final Row<byte[], byte[]> result = iterator.next();
@@ -864,16 +867,29 @@ public final class Scanner implements Runnable {
         }
       }
       
-      final ArrayList<KeyValue> row = new ArrayList<KeyValue>(result.getColumns().size());
-      // TODO - iterator on the columns too so we can satisfy max kvs
-      for (final Column<byte[]> column : result.getColumns()) {
-        final KeyValue kv = new KeyValue(result.getKey(), families[0], 
-            column.getName(), column.getTimestamp() / 1000, // micro to ms 
-            column.getByteArrayValue());
-        row.add(kv);
+      try {
+        ColumnList<byte[]> columns;
+        final ArrayList<KeyValue> row = new ArrayList<KeyValue>();
+        final RowQuery<byte[], byte[]> query =
+          keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
+          .getKey(result.getKey())
+          .autoPaginate(true)
+          .withColumnRange(new RangeBuilder().setLimit(max_num_rows).build());
+        // TODO - satisfy max kvs
+        while (!(columns = query.execute().getResult()).isEmpty()) {
+          for (Column<byte[]> column : columns) {
+            final KeyValue kv = new KeyValue(result.getKey(), families[0],
+                column.getName(), column.getTimestamp() / 1000, // micro to ms
+                column.getByteArrayValue());
+            row.add(kv);
+            rows.add(row);
+            kv_count += row.size();
+          }
+        }
+      } catch (ConnectionException e) {
+        deferred.callback(e);
+        return;
       }
-      rows.add(row);
-      kv_count += row.size();
     }
     if (rows.size() == 0 || (rows.get(rows.size() - 1).equals(last_row))) {
       // we're done
