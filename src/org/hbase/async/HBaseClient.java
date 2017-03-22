@@ -36,6 +36,7 @@ import com.netflix.astyanax.model.ColumnFamily;
 import com.netflix.astyanax.model.ColumnList;
 import com.netflix.astyanax.model.ColumnMap;
 import com.netflix.astyanax.model.ConsistencyLevel;
+import com.netflix.astyanax.query.ColumnFamilyQuery;
 import com.netflix.astyanax.query.RowQuery;
 import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
 import com.netflix.astyanax.retry.BoundedExponentialBackoff;
@@ -252,9 +253,13 @@ public class HBaseClient {
     // Sucks, have to have a family I guess
     try {
       final ListenableFuture<OperationResult<ColumnList<byte[]>>> future; 
-      final RowQuery<byte[], byte[]> query = keyspace.prepareQuery(
-          column_family_schemas.get(request.family()))
-          .getKey(request.key);
+      final ColumnFamilyQuery<byte[], byte[]> cfquery = keyspace.prepareQuery(
+          column_family_schemas.get(request.family()));
+      if (Bytes.memcmp(tsdb_uid_table, request.table()) != 0) {
+        // Force quorum lookups for IDs
+        cfquery.setConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM);
+      }
+      final RowQuery<byte[], byte[]> query = cfquery.getKey(request.key);
       if (request.qualifiers() == null || request.qualifiers().length < 1) {
         future = query.executeAsync();
       } else {
