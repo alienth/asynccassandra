@@ -838,7 +838,7 @@ public final class Scanner implements Runnable {
     try {
       final OperationResult<Rows<byte[], byte[]>> results =
           keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-        .withCaching(populate_blockcache)
+        .withCaching(populate_blockcache) // TODO: This isn't analogous to a block cache
         .getKeyRange(start_key, stop_key, null, null, max_num_rows).execute();
       iterator = results.getResult().iterator();
     } catch (ConnectionException e) {
