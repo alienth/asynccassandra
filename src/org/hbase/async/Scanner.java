@@ -26,8 +26,10 @@
  */
 package org.hbase.async;
 
+import java.lang.Thread;
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
@@ -39,8 +41,11 @@ import com.netflix.astyanax.Keyspace;
 import com.netflix.astyanax.connectionpool.OperationResult;
 import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
 import com.netflix.astyanax.model.Column;
+import com.netflix.astyanax.model.ColumnList;
 import com.netflix.astyanax.model.Row;
 import com.netflix.astyanax.model.Rows;
+import com.netflix.astyanax.query.RowQuery;
+import com.netflix.astyanax.util.RangeBuilder;
 import com.stumbleupon.async.Deferred;
 
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
@@ -109,8 +114,8 @@ public final class Scanner implements Runnable {
   private final ExecutorService executor; // do the dew
   private final Keyspace keyspace;
   
-  private OperationResult<Rows<byte[], byte[]>> results;
   private Iterator<Row<byte[], byte[]>> iterator;
+  private Iterator<Column<byte[]>> colIterator;
   
   /**
    * The key to start scanning from.  An empty array means "start from the
@@ -820,6 +825,10 @@ public final class Scanner implements Runnable {
 //    }
   }
 
+  // private Row<byte[], byte[]> cur_row;
+  private byte[] last_key;
+  private boolean last_scan = false;
+
   @Override
   public void run() {
     if (families == null || families.length < 1) {
@@ -827,13 +836,21 @@ public final class Scanner implements Runnable {
           "Can't scan cassandra without a column family: " + this));
       return;
     }
+    if (last_scan) {
+      deferred.callback(null);
+      return;
+    }
     if (iterator == null) {
       try {
-        final OperationResult<Rows<byte[], byte[]>> results = 
+        LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
+        final OperationResult<Rows<byte[], byte[]>> results =
             keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-          .withCaching(populate_blockcache)
-          .getRowRange(start_key, stop_key, null, null, Integer.MAX_VALUE).execute();
+          .getKeyRange(start_key, stop_key, null, null, max_num_rows).execute();
         iterator = results.getResult().iterator();
+        if (results.getResult().size() < max_num_rows) {
+          // We've fetched all of our rows
+          last_scan = true;
+        }
       } catch (ConnectionException e) {
         deferred.callback(e);
         return;
@@ -846,32 +863,48 @@ public final class Scanner implements Runnable {
       return;
     }
     
-    // dunno how to size this since we don't have the low level deets
     final ArrayList<ArrayList<KeyValue>> rows =
-        new ArrayList<ArrayList<KeyValue>>();
-    
+        new ArrayList<ArrayList<KeyValue>>(max_num_rows);
+
     int kv_count = 0;
-    while (rows.size() < max_num_rows && iterator.hasNext()) {
-      final Row<byte[], byte[]> result = iterator.next();
+
+    while (kv_count <= max_num_kvs && iterator.hasNext()) {
+      final Row<byte[], byte[]> cur_row = iterator.next();
+      last_key = cur_row.getKey();
+      LOG.info("Looking at key " + Bytes.pretty(cur_row.getKey()));
       if (filter != null) {
         // TODO - post filtering SUCKS!!!!!
         final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
-        if (!regex.matches(result.getKey())) {
+        if (!regex.matches(cur_row.getKey())) {
           continue;
         }
       }
-      
-      final ArrayList<KeyValue> row = new ArrayList<KeyValue>(result.getColumns().size());
-      // TODO - iterator on the columns too so we can satisfy max kvs
-      for (final Column<byte[]> column : result.getColumns()) {
-        final KeyValue kv = new KeyValue(result.getKey(), families[0], 
-            column.getName(), column.getTimestamp() / 1000, // micro to ms 
+
+      final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
+      // if (colIterator != null) {
+      final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
+      // colIterator = cur_row.getColumns().iterator();
+      // }
+      while (colIterator.hasNext()) {
+        final Column<byte[]> column = colIterator.next();
+        final KeyValue kv = new KeyValue(cur_row.getKey(), families[0],
+            column.getName(), column.getTimestamp() / 1000, // micro to ms
             column.getByteArrayValue());
-        row.add(kv);
+        kvs.add(kv);
       }
-      rows.add(row);
-      kv_count += row.size();
+      if (kvs.size() > 0) {
+        rows.add(kvs);
+        kv_count += kvs.size();
+      }
     }
+
+    if (iterator.hasNext()) {
+      deferred.callback(rows);
+      return;
+    }
+
+    iterator = null;
+    start_key = last_key;
     deferred.callback(rows);
   }
 }
