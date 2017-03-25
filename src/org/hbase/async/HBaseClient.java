@@ -150,6 +150,9 @@ public class HBaseClient {
       .setPort(config.getInt("asynccassandra.port"))
       .setMaxConnsPerHost(config.getInt("asynccassandra.max_conns_per_host"))
       .setSeeds(config.getString("asynccassandra.seeds"));
+    if (config.hasProperty("asynccassandra.datacenter")) {
+      pool.setLocalDatacenter(config.getString("asynccassandra.datacenter"));
+    }
     monitor = new CountingConnectionPoolMonitor();
     
     tsdb_table = config.getString("tsd.storage.hbase.data_table").getBytes();
