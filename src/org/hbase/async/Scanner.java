@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
 
@@ -708,6 +709,7 @@ public final class Scanner implements Runnable {
     return deferred;
   }
 
+
   /**
    * Closes this scanner (don't forget to call this when you're done with it!).
    * <p>
@@ -825,27 +827,59 @@ public final class Scanner implements Runnable {
 //    }
   }
 
+  private ArrayList<byte[]> keys;
+  private Iterator<byte[]> keyIterator;
+
+  private void buildKeys() {
+	keys = new ArrayList<byte[]>();
+    final byte[] start_key_ts = Arrays.copyOfRange(start_key, 4, 8);
+    int startTs = Bytes.getInt(start_key_ts);
+
+    final byte[] stop_key_ts = Arrays.copyOfRange(stop_key, 4, 8);
+    final int stopTs = Bytes.getInt(stop_key_ts);
+
+    final int interval = 3600;
+    startTs -= (startTs % interval);
+    for (; startTs<stopTs; startTs+=interval) {
+      byte[] key = new byte[8];
+      System.arraycopy(start_key, 0, key, 0, 4); // metric
+      System.arraycopy(Bytes.fromInt(startTs), 0, key, 4, 4); // new TS
+      keys.add(key);
+    }
+
+    keyIterator = keys.iterator();
+  }
+
   // private Row<byte[], byte[]> cur_row;
   private byte[] last_key;
   private boolean last_scan = false;
 
   @Override
   public void run() {
+    if (keys == null) {
+      buildKeys();
+    }
     if (families == null || families.length < 1) {
       deferred.callback(new UnsupportedOperationException(
           "Can't scan cassandra without a column family: " + this));
       return;
     }
-    if (last_scan) {
+    if (last_scan || !keyIterator.hasNext()) {
       deferred.callback(null);
       return;
     }
     if (iterator == null) {
+      ArrayList<byte[]> fetchKeys = new ArrayList<byte[]>(max_num_rows);
+      while (fetchKeys.size() < max_num_rows && keyIterator.hasNext()) {
+        fetchKeys.add(keyIterator.next());
+      }
       try {
         LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
         final OperationResult<Rows<byte[], byte[]>> results =
             keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-          .getKeyRange(start_key, stop_key, null, null, max_num_rows).execute();
+                    .getKeySlice(fetchKeys)
+                    .execute();
+//          .getKeyRange(start_key, stop_key, null, null, max_num_rows).execute();
         iterator = results.getResult().iterator();
         if (results.getResult().size() < max_num_rows) {
           // We've fetched all of our rows
@@ -872,23 +906,31 @@ public final class Scanner implements Runnable {
       final Row<byte[], byte[]> cur_row = iterator.next();
       last_key = cur_row.getKey();
       LOG.info("Looking at key " + Bytes.pretty(cur_row.getKey()));
-      if (filter != null) {
-        // TODO - post filtering SUCKS!!!!!
-        final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
-        if (!regex.matches(cur_row.getKey())) {
-          continue;
-        }
-      }
-
       final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
       // if (colIterator != null) {
       final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
+      LOG.info("Columns: " + cur_row.getColumns().getColumnNames());
       // colIterator = cur_row.getColumns().iterator();
       // }
       while (colIterator.hasNext()) {
         final Column<byte[]> column = colIterator.next();
-        final KeyValue kv = new KeyValue(cur_row.getKey(), families[0],
-            column.getName(), column.getTimestamp() / 1000, // micro to ms
+        byte[] fake_key = new byte[14];
+
+        System.arraycopy(cur_row.getKey(), 0, fake_key, 0, 8);
+        System.arraycopy(column.getName(), 0, fake_key, 8, 6);
+
+        if (filter != null) {
+          // TODO - post filtering SUCKS!!!!!
+          final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
+          if (!regex.matches(fake_key)) {
+            continue;
+          }
+        }
+
+        byte[] fake_name = new byte[column.getName().length-6];
+        System.arraycopy(column.getName(), 6, fake_name, 0, fake_name.length);
+        final KeyValue kv = new KeyValue(fake_key, families[0],
+            fake_name, column.getTimestamp() / 1000, // micro to ms
             column.getByteArrayValue());
         kvs.add(kv);
       }
