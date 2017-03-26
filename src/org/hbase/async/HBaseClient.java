@@ -59,6 +59,11 @@ public class HBaseClient {
       BytesArraySerializer.get(),   // Key Serializer
       BytesArraySerializer.get());  // Column Serializer
 
+  public static final ColumnFamily<byte[], byte[]> TSDB_T_INDEX = new ColumnFamily<byte[], byte[]>(
+      "tindex",              // Column Family Name
+      BytesArraySerializer.get(),   // Key Serializer
+      BytesArraySerializer.get());  // Column Serializer
+
   public static final ColumnFamily<byte[], byte[]> TSDB_UID_NAME = new ColumnFamily<byte[], byte[]>(
       "name",              // Column Family Name
       BytesArraySerializer.get(),   // Key Serializer
@@ -169,6 +174,17 @@ public class HBaseClient {
     keyspace = context.getClient();
     context.start();
     buffered_mutations = keyspace.prepareMutationBatch();
+
+    METRICS_WIDTH = config.hasProperty("tsd.storage.uid.width.metric") ?
+      config.getShort("tsd.storage.uid.width.metric") : 3;
+    TAG_NAME_WIDTH = config.hasProperty("tsd.storage.uid.width.tagk") ?
+      config.getShort("tsd.storage.uid.width.metric") : 3;
+    TAG_VALUE_WIDTH = config.hasProperty("tsd.storage.uid.width.tagv") ?
+      config.getShort("tsd.storage.uid.width.metric") : 3;
+
+    if (config.hasProperty("tsd.storage.salt.width")) {
+      SALT_WIDTH = config.getShort("tsd.storage.salt.width");
+    }
     
     tsdb_table = config.getString("tsd.storage.hbase.data_table").getBytes();
     tsdb_uid_table = config.getString("tsd.storage.hbase.uid_table").getBytes();
@@ -273,9 +289,39 @@ public class HBaseClient {
     
     return deferred;
   }
-  
+
+  static short METRICS_WIDTH = 3;
+  static short TAG_NAME_WIDTH = 3;
+  static short TAG_VALUE_WIDTH = 3;
+  static final short TIMESTAMP_BYTES = 4;
+  static short SALT_WIDTH = 0;
+
+  private void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) {
+    // Take the first 8 bytes of the orig key and put them in the new key.
+    // Take the last 6 bytes of the orig key and all of the orig_column and put
+    // them in the new column.
+    //
+    // Take the metric of the orig key and put it in the new key
+    // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
+    // Take the timestamp of the orig key and put it in the value.
+    // Take only the tags from the column name, and put them in a new column.
+
+    final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
+    final int tsInt = Bytes.getInt(ts);
+    int month = tsInt - (tsInt % (86400 * 28));
+    byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
+    System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
+    System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
+
+    // TODO - prevent duplicate puts here.
+    mutation.withRow(TSDB_T_INDEX, new_key).putColumn(Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, orig_key.length), ts);
+  }
+
   public Deferred<Object> put(final PutRequest request) {
     final MutationBatch mutation = keyspace.prepareMutationBatch();
+    if (Bytes.memcmp("t".getBytes(), request.family) == 0) {
+      indexMutation(request.key, request.qualifier(), mutation);
+    }
     mutation.withRow(column_family_schemas.get(request.family), request.key)
       .putColumn(request.qualifier(), request.value());
     synchronized (buffered_mutations) {

@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
 
@@ -184,6 +185,10 @@ public final class Scanner implements Runnable {
   
   private Deferred<ArrayList<ArrayList<KeyValue>>> deferred;
 
+  static short metric_width = 3;
+  static short key_width = 7;
+  static short tag_width = 6;
+
   /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
@@ -195,6 +200,10 @@ public final class Scanner implements Runnable {
     this.executor = executor;
     this.table = table;
     this.keyspace = keyspace;
+
+    metric_width = (short) (HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH);
+    key_width = (short) (metric_width + HBaseClient.TIMESTAMP_BYTES);
+    tag_width = (short) (HBaseClient.TAG_NAME_WIDTH + HBaseClient.TAG_VALUE_WIDTH);
   }
 
   /**
@@ -826,8 +835,6 @@ public final class Scanner implements Runnable {
   }
 
   // private Row<byte[], byte[]> cur_row;
-  private byte[] last_key;
-  private boolean last_scan = false;
 
   @Override
   public void run() {
@@ -836,49 +843,106 @@ public final class Scanner implements Runnable {
           "Can't scan cassandra without a column family: " + this));
       return;
     }
-    if (last_scan) {
-      deferred.callback(null);
+    // TODO: It's wasteful to compare this on each iteration.
+    if (Bytes.memcmp(families[0], "id".getBytes()) == 0 || Bytes.memcmp(families[0], "name".getBytes()) == 0) {
+      scanID();
       return;
+    } else if (Bytes.memcmp(families[0], "t".getBytes()) == 0) {
+      scanDatapoints();
+      return;
+    } else {
+      deferred.callback(new UnsupportedOperationException(
+          "Unsupported column family scanned: " + this));
+      return;
+    }
+  }
+
+  private ArrayList<byte[]> keys;
+
+  private void buildKeys() {
+	  keys = new ArrayList<byte[]>();
+
+    final byte[] start_key_ts = Arrays.copyOfRange(start_key, metric_width, key_width);
+    int startTs = Bytes.getInt(start_key_ts);
+
+    final byte[] stop_key_ts = Arrays.copyOfRange(stop_key, metric_width, key_width);
+    final int stopTs = Bytes.getInt(stop_key_ts);
+
+    final byte[] metric = Arrays.copyOfRange(start_key, 0, metric_width);
+
+    final int interval = 2419200;
+
+    startTs -= (startTs % interval);
+
+    ArrayList<byte[]> indexKeys = new ArrayList<byte[]>();
+    for (; startTs<stopTs; startTs+=interval) {
+      byte[] key = new byte[key_width];
+      System.arraycopy(start_key, 0, key, 0, metric_width); // metric
+      System.arraycopy(Bytes.fromInt(startTs), 0, key, metric_width, HBaseClient.TIMESTAMP_BYTES); // new TS
+      indexKeys.add(key);
+    }
+
+
+    Rows<byte[], byte[]> rows;
+    try {
+    rows = keyspace.prepareQuery(HBaseClient.TSDB_T_INDEX).getKeySlice(indexKeys).execute().getResult();
+    } catch (ConnectionException e) {
+      deferred.callback(e);
+      return;
+    }
+
+    for (Row<byte[], byte[]> row : rows) {
+      for (Column<byte[]> column : row.getColumns()) {
+        byte[] fake_key = new byte[key_width + tag_width];
+        System.arraycopy(column.getName(), 0, fake_key, key_width, tag_width);
+        if (filter != null) {
+          final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
+          if (!regex.matches(fake_key)) {
+            continue;
+          }
+        }
+        System.arraycopy(metric, 0, fake_key, 0, metric.length);
+        System.arraycopy(column.getByteArrayValue(), 0, fake_key, metric_width, HBaseClient.TIMESTAMP_BYTES);
+        keys.add(fake_key);
+      }
+    }
+  }
+
+  public void scanDatapoints() {
+    if (keys == null) {
+      buildKeys();
+      if (keys.size() == 0) {
+        // No matching rows, apparently
+        deferred.callback(null);
+        return;
+      }
     }
     if (iterator == null) {
       try {
-        LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
+        // LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
         final OperationResult<Rows<byte[], byte[]>> results =
-            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-          .getKeyRange(start_key, stop_key, null, null, max_num_rows).execute();
+            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0])).getKeySlice(keys).execute();
         iterator = results.getResult().iterator();
-        if (results.getResult().size() < max_num_rows) {
-          // We've fetched all of our rows
-          last_scan = true;
-        }
       } catch (ConnectionException e) {
         deferred.callback(e);
         return;
       }
     }
-    
+
     if (!iterator.hasNext()) {
       deferred.callback(null);
       //return Deferred.fromResult(null);
       return;
     }
-    
+
     final ArrayList<ArrayList<KeyValue>> rows =
-        new ArrayList<ArrayList<KeyValue>>(max_num_rows);
+        new ArrayList<ArrayList<KeyValue>>(keys.size());
 
     int kv_count = 0;
 
     while (kv_count <= max_num_kvs && iterator.hasNext()) {
       final Row<byte[], byte[]> cur_row = iterator.next();
-      last_key = cur_row.getKey();
       LOG.info("Looking at key " + Bytes.pretty(cur_row.getKey()));
-      if (filter != null) {
-        // TODO - post filtering SUCKS!!!!!
-        final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
-        if (!regex.matches(cur_row.getKey())) {
-          continue;
-        }
-      }
 
       final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
       // if (colIterator != null) {
@@ -898,13 +962,56 @@ public final class Scanner implements Runnable {
       }
     }
 
-    if (iterator.hasNext()) {
-      deferred.callback(rows);
+    deferred.callback(rows);
+  }
+
+  private void scanID() {
+    if (iterator == null) {
+      try {
+        final OperationResult<Rows<byte[], byte[]>> results =
+            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
+          .withCaching(populate_blockcache)
+          .getRowRange(start_key, stop_key, null, null, Integer.MAX_VALUE).execute();
+        iterator = results.getResult().iterator();
+      } catch (ConnectionException e) {
+        deferred.callback(e);
+        return;
+      }
+    }
+
+    if (!iterator.hasNext()) {
+      deferred.callback(null);
+      //return Deferred.fromResult(null);
       return;
     }
 
-    iterator = null;
-    start_key = last_key;
+    // dunno how to size this since we don't have the low level deets
+    final ArrayList<ArrayList<KeyValue>> rows =
+        new ArrayList<ArrayList<KeyValue>>();
+
+    int kv_count = 0;
+    while (rows.size() < max_num_rows && iterator.hasNext()) {
+      final Row<byte[], byte[]> result = iterator.next();
+      if (filter != null) {
+        // TODO - post filtering SUCKS!!!!!
+        final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
+        if (!regex.matches(result.getKey())) {
+          continue;
+        }
+      }
+
+      final ArrayList<KeyValue> row = new ArrayList<KeyValue>(result.getColumns().size());
+      // TODO - iterator on the columns too so we can satisfy max kvs
+      for (final Column<byte[]> column : result.getColumns()) {
+        final KeyValue kv = new KeyValue(result.getKey(), families[0],
+            column.getName(), column.getTimestamp() / 1000, // micro to ms
+            column.getByteArrayValue());
+        row.add(kv);
+      }
+      rows.add(row);
+      kv_count += row.size();
+    }
     deferred.callback(rows);
   }
+
 }
