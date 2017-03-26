@@ -169,6 +169,17 @@ public class HBaseClient {
     keyspace = context.getClient();
     context.start();
     buffered_mutations = keyspace.prepareMutationBatch();
+
+    METRICS_WIDTH = config.hasProperty("tsd.storage.uid.width.metric") ?
+      config.getShort("tsd.storage.uid.width.metric") : 3;
+    TAG_NAME_WIDTH = config.hasProperty("tsd.storage.uid.width.tagk") ?
+      config.getShort("tsd.storage.uid.width.metric") : 3;
+    TAG_VALUE_WIDTH = config.hasProperty("tsd.storage.uid.width.tagv") ?
+      config.getShort("tsd.storage.uid.width.metric") : 3;
+
+    if (config.hasProperty("tsd.storage.salt.width")) {
+      SALT_WIDTH = config.getShort("tsd.storage.salt.width");
+    }
     
     tsdb_table = config.getString("tsd.storage.hbase.data_table").getBytes();
     tsdb_uid_table = config.getString("tsd.storage.hbase.uid_table").getBytes();
@@ -273,11 +284,30 @@ public class HBaseClient {
     
     return deferred;
   }
-  
+
+  static short METRICS_WIDTH = 3;
+  static short TAG_NAME_WIDTH = 3;
+  static short TAG_VALUE_WIDTH = 3;
+  static final short TIMESTAMP_BYTES = 4;
+  static short SALT_WIDTH = 0;
+
+  private void buildKey(byte[] orig_key, byte[] orig_column, byte[] new_key, byte[] new_column) {
+    // Take the first 8 bytes of the orig key and put them in the new key.
+    // Take the last 6 bytes of the orig key and all of the orig_column and put
+    // them in the new column.
+
+    System.arraycopy(orig_key, 0, new_key, 0, new_key.length);
+    System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_column, 0, TAG_NAME_WIDTH + TAG_VALUE_WIDTH);
+    System.arraycopy(orig_column, 0, new_column, TAG_NAME_WIDTH + TAG_VALUE_WIDTH, orig_column.length);
+  }
+
   public Deferred<Object> put(final PutRequest request) {
     final MutationBatch mutation = keyspace.prepareMutationBatch();
-    mutation.withRow(column_family_schemas.get(request.family), request.key)
-      .putColumn(request.qualifier(), request.value());
+    byte[] key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
+    byte[] column = new byte[TAG_NAME_WIDTH + TAG_VALUE_WIDTH + request.qualifier().length];
+    buildKey(request.key, request.qualifier(), key, column);
+    mutation.withRow(column_family_schemas.get(request.family), key)
+      .putColumn(column, request.value());
     synchronized (buffered_mutations) {
       buffered_mutations.mergeShallow(mutation);
       final long count = buffer_count.incrementAndGet();

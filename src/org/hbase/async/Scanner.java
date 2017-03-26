@@ -185,6 +185,10 @@ public final class Scanner implements Runnable {
   
   private Deferred<ArrayList<ArrayList<KeyValue>>> deferred;
 
+  static short metric_width = 3;
+  static short key_width = 7;
+  static short tag_width = 6;
+
   /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
@@ -196,6 +200,10 @@ public final class Scanner implements Runnable {
     this.executor = executor;
     this.table = table;
     this.keyspace = keyspace;
+
+    metric_width = (short) (HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH);
+    key_width = (short) (metric_width + HBaseClient.TIMESTAMP_BYTES);
+    tag_width = (short) (HBaseClient.TAG_NAME_WIDTH + HBaseClient.TAG_VALUE_WIDTH);
   }
 
   /**
@@ -832,18 +840,18 @@ public final class Scanner implements Runnable {
 
   private void buildKeys() {
 	keys = new ArrayList<byte[]>();
-    final byte[] start_key_ts = Arrays.copyOfRange(start_key, 4, 8);
+    final byte[] start_key_ts = Arrays.copyOfRange(start_key, metric_width, key_width);
     int startTs = Bytes.getInt(start_key_ts);
 
-    final byte[] stop_key_ts = Arrays.copyOfRange(stop_key, 4, 8);
+    final byte[] stop_key_ts = Arrays.copyOfRange(stop_key, metric_width, key_width);
     final int stopTs = Bytes.getInt(stop_key_ts);
 
     final int interval = 3600;
     startTs -= (startTs % interval);
     for (; startTs<stopTs; startTs+=interval) {
-      byte[] key = new byte[8];
-      System.arraycopy(start_key, 0, key, 0, 4); // metric
-      System.arraycopy(Bytes.fromInt(startTs), 0, key, 4, 4); // new TS
+      byte[] key = new byte[key_width];
+      System.arraycopy(start_key, 0, key, 0, metric_width); // metric
+      System.arraycopy(Bytes.fromInt(startTs), 0, key, metric_width, HBaseClient.TIMESTAMP_BYTES); // new TS
       keys.add(key);
     }
 
@@ -905,19 +913,17 @@ public final class Scanner implements Runnable {
     while (kv_count <= max_num_kvs && iterator.hasNext()) {
       final Row<byte[], byte[]> cur_row = iterator.next();
       last_key = cur_row.getKey();
-      LOG.info("Looking at key " + Bytes.pretty(cur_row.getKey()));
       final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
       // if (colIterator != null) {
       final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
-      LOG.info("Columns: " + cur_row.getColumns().getColumnNames());
       // colIterator = cur_row.getColumns().iterator();
       // }
       while (colIterator.hasNext()) {
         final Column<byte[]> column = colIterator.next();
-        byte[] fake_key = new byte[14];
+        byte[] fake_key = new byte[key_width + tag_width];
 
-        System.arraycopy(cur_row.getKey(), 0, fake_key, 0, 8);
-        System.arraycopy(column.getName(), 0, fake_key, 8, 6);
+        System.arraycopy(cur_row.getKey(), 0, fake_key, 0, key_width);
+        System.arraycopy(column.getName(), 0, fake_key, key_width, tag_width);
 
         if (filter != null) {
           // TODO - post filtering SUCKS!!!!!
@@ -927,8 +933,8 @@ public final class Scanner implements Runnable {
           }
         }
 
-        byte[] fake_name = new byte[column.getName().length-6];
-        System.arraycopy(column.getName(), 6, fake_name, 0, fake_name.length);
+        byte[] fake_name = new byte[column.getName().length - tag_width];
+        System.arraycopy(column.getName(), tag_width, fake_name, 0, fake_name.length);
         final KeyValue kv = new KeyValue(fake_key, families[0],
             fake_name, column.getTimestamp() / 1000, // micro to ms
             column.getByteArrayValue());
