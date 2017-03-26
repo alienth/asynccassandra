@@ -902,7 +902,7 @@ public final class Scanner implements Runnable {
           }
         }
         System.arraycopy(metric, 0, fake_key, 0, metric.length);
-        System.arraycopy(column.getByteArrayValue(), 0, fake_key, metric_width, HBaseClient.TIMESTAMP_BYTES);
+        System.arraycopy(column.getName(), tag_width, fake_key, metric_width, HBaseClient.TIMESTAMP_BYTES);
         keys.add(fake_key);
       }
     }
