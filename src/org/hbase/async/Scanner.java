@@ -902,6 +902,7 @@ public final class Scanner implements Runnable {
           }
         }
         System.arraycopy(metric, 0, fake_key, 0, metric.length);
+        // TODO make the timestamp an offset.
         System.arraycopy(column.getName(), tag_width, fake_key, metric_width, HBaseClient.TIMESTAMP_BYTES);
         keys.add(fake_key);
       }
@@ -920,6 +921,7 @@ public final class Scanner implements Runnable {
     if (iterator == null) {
       try {
         // LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
+        // TODO paginate
         final OperationResult<Rows<byte[], byte[]>> results =
             keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0])).getKeySlice(keys).execute();
         iterator = results.getResult().iterator();
