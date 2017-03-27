@@ -306,7 +306,7 @@ public class HBaseClient {
     final int tsInt = Bytes.getInt(ts);
     int month = tsInt - (tsInt % (86400 * 28));
     byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
-    byte[] new_col = new byte[orig_key.length - METRICS_WIDTH];
+    byte[] new_col = new byte[orig_key.length - METRICS_WIDTH - SALT_WIDTH];
     System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
     System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
     System.arraycopy(ts, 0, new_col, 0, ts.length);
