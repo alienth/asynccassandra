@@ -300,17 +300,17 @@ public class HBaseClient {
     // Take the metric of the orig key and put it in the new key
     // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
     // Take the timestamp of the orig key and put it in the column name.
-    // Take only the tags from the column name, and put them the column name.
+    // Take only the tags from the orig key, and put them the column name.
 
     final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
     final int tsInt = Bytes.getInt(ts);
     int month = tsInt - (tsInt % (86400 * 28));
     byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
-    byte[] new_col = new byte[TAG_NAME_WIDTH + TAG_VALUE_WIDTH + TIMESTAMP_BYTES];
+    byte[] new_col = new byte[orig_key.length - METRICS_WIDTH];
     System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
     System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
     System.arraycopy(ts, 0, new_col, 0, ts.length);
-    System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, TAG_NAME_WIDTH + TAG_VALUE_WIDTH);
+    System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
 
     // TODO - prevent duplicate puts here.
     mutation.withRow(TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});

@@ -894,8 +894,8 @@ public final class Scanner implements Runnable {
 
     for (Row<byte[], byte[]> row : rows) {
       for (Column<byte[]> column : row.getColumns()) {
-        byte[] fake_key = new byte[key_width + tag_width];
-        System.arraycopy(column.getName(), HBaseClient.TIMESTAMP_BYTES, fake_key, key_width, tag_width);
+        byte[] fake_key = new byte[column.getName().length + metric_width];
+        System.arraycopy(column.getName(), HBaseClient.TIMESTAMP_BYTES, fake_key, key_width, fake_key.length - key_width);
         if (filter != null) {
           final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
           if (!regex.matches(fake_key)) {
@@ -950,6 +950,7 @@ public final class Scanner implements Runnable {
       final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
       // if (colIterator != null) {
       final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
+      LOG.info("Column names " + cur_row.getColumns().getColumnNames());
       // colIterator = cur_row.getColumns().iterator();
       // }
       while (colIterator.hasNext()) {
