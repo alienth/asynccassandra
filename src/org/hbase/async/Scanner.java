@@ -910,6 +910,8 @@ public final class Scanner implements Runnable {
     }
   }
 
+  private int keyIndex = 0;
+
   public void scanDatapoints() {
     if (keys == null) {
       buildKeys();
@@ -922,9 +924,9 @@ public final class Scanner implements Runnable {
     if (iterator == null) {
       try {
         // LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
-        // TODO paginate
         final OperationResult<Rows<byte[], byte[]>> results =
-            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0])).getKeySlice(keys).execute();
+            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0])).getKeySlice(keys.subList(keyIndex, Math.min(keys.size() - 1, keyIndex + max_num_rows) )).execute();
+        keyIndex += results.getResult().size();
         iterator = results.getResult().iterator();
       } catch (ConnectionException e) {
         deferred.callback(e);
@@ -964,6 +966,10 @@ public final class Scanner implements Runnable {
         rows.add(kvs);
         kv_count += kvs.size();
       }
+    }
+
+    if (!iterator.hasNext() && keyIndex < keys.size() - 1) {
+      iterator = null;
     }
 
     deferred.callback(rows);
