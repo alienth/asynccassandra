@@ -885,7 +885,8 @@ public final class Scanner implements Runnable {
 
     Rows<byte[], byte[]> rows;
     try {
-    rows = keyspace.prepareQuery(HBaseClient.TSDB_T_INDEX).getKeySlice(indexKeys).execute().getResult();
+    rows = keyspace.prepareQuery(HBaseClient.TSDB_T_INDEX).getKeySlice(indexKeys).withColumnRange(start_key_ts, stop_key_ts, false, Integer.MAX_VALUE)
+      .execute().getResult();
     } catch (ConnectionException e) {
       deferred.callback(e);
       return;
@@ -894,7 +895,7 @@ public final class Scanner implements Runnable {
     for (Row<byte[], byte[]> row : rows) {
       for (Column<byte[]> column : row.getColumns()) {
         byte[] fake_key = new byte[key_width + tag_width];
-        System.arraycopy(column.getName(), 0, fake_key, key_width, tag_width);
+        System.arraycopy(column.getName(), HBaseClient.TIMESTAMP_BYTES, fake_key, key_width, tag_width);
         if (filter != null) {
           final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
           if (!regex.matches(fake_key)) {
@@ -903,7 +904,7 @@ public final class Scanner implements Runnable {
         }
         System.arraycopy(metric, 0, fake_key, 0, metric.length);
         // TODO make the timestamp an offset.
-        System.arraycopy(column.getName(), tag_width, fake_key, metric_width, HBaseClient.TIMESTAMP_BYTES);
+        System.arraycopy(column.getName(), 0, fake_key, metric_width, HBaseClient.TIMESTAMP_BYTES);
         keys.add(fake_key);
       }
     }

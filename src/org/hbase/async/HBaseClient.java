@@ -297,14 +297,10 @@ public class HBaseClient {
   static short SALT_WIDTH = 0;
 
   private void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) {
-    // Take the first 8 bytes of the orig key and put them in the new key.
-    // Take the last 6 bytes of the orig key and all of the orig_column and put
-    // them in the new column.
-    //
     // Take the metric of the orig key and put it in the new key
     // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
-    // Take the timestamp of the orig key and put it in the value.
-    // Take only the tags from the column name, and put them in a new column.
+    // Take the timestamp of the orig key and put it in the column name.
+    // Take only the tags from the column name, and put them the column name.
 
     final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
     final int tsInt = Bytes.getInt(ts);
@@ -313,8 +309,8 @@ public class HBaseClient {
     byte[] new_col = new byte[TAG_NAME_WIDTH + TAG_VALUE_WIDTH + TIMESTAMP_BYTES];
     System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
     System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
-    System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, 0, TAG_NAME_WIDTH + TAG_VALUE_WIDTH);
-    System.arraycopy(ts, 0, new_col, TAG_NAME_WIDTH + TAG_VALUE_WIDTH, ts.length);
+    System.arraycopy(ts, 0, new_col, 0, ts.length);
+    System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, TAG_NAME_WIDTH + TAG_VALUE_WIDTH);
 
     // TODO - prevent duplicate puts here.
     mutation.withRow(TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
