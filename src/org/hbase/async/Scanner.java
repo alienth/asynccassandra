@@ -136,6 +136,9 @@ public final class Scanner implements Runnable {
    */
   private byte[] stop_key = EMPTY_ARRAY;
 
+  private byte[] start_col;
+  private byte[] stop_col;
+
   private byte[][] families;
   private byte[][][] qualifiers;
 
@@ -213,6 +216,31 @@ public final class Scanner implements Runnable {
    */
   public byte[] getCurrentKey() {
     return start_key;
+  }
+
+  /**
+   * Specifies from which col to start scanning (inclusive).
+   * @param start_col The column key to start scanning from.  If you don't invoke
+   * this method, scanning will begin from the first column for the given key.
+   * <strong>This byte array will NOT be copied.</strong>
+   * @throws IllegalStateException if scanning already started.
+   */
+  public void setStartCol(final byte[] start_col) {
+    KeyValue.checkKey(start_col);
+    checkScanningNotStarted();
+    this.start_col = start_col;
+  }
+
+  public void setStopCol(final byte[] stop_col) {
+    KeyValue.checkKey(stop_col);
+    checkScanningNotStarted();
+    this.stop_col = stop_col;
+  }
+
+  public void addKey(final byte[] key) {
+    KeyValue.checkKey(key);
+    checkScanningNotStarted();
+    this.keys.add(key);
   }
 
   /**
@@ -980,8 +1008,8 @@ public final class Scanner implements Runnable {
       try {
         final OperationResult<Rows<byte[], byte[]>> results =
             keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-          .withCaching(populate_blockcache)
-          .getRowRange(start_key, stop_key, null, null, Integer.MAX_VALUE).execute();
+          .getKeySlice(keys)
+          .withColumnRange(start_col, stop_col, false, Integer.MAX_VALUE).execute();
         iterator = results.getResult().iterator();
       } catch (ConnectionException e) {
         deferred.callback(e);
@@ -1000,18 +1028,10 @@ public final class Scanner implements Runnable {
         new ArrayList<ArrayList<KeyValue>>();
 
     int kv_count = 0;
-    while (rows.size() < max_num_rows && iterator.hasNext()) {
+    while (iterator.hasNext()) {
       final Row<byte[], byte[]> result = iterator.next();
-      if (filter != null) {
-        // TODO - post filtering SUCKS!!!!!
-        final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
-        if (!regex.matches(result.getKey())) {
-          continue;
-        }
-      }
 
       final ArrayList<KeyValue> row = new ArrayList<KeyValue>(result.getColumns().size());
-      // TODO - iterator on the columns too so we can satisfy max kvs
       for (final Column<byte[]> column : result.getColumns()) {
         final KeyValue kv = new KeyValue(result.getKey(), families[0],
             column.getName(), column.getTimestamp() / 1000, // micro to ms
