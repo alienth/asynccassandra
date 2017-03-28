@@ -446,7 +446,7 @@ public class HBaseClient {
       return Deferred.fromResult(false);
     } catch (BusyLockException e) {
         // Wrap the busy lock exception as an HBaseException so that opentsdb tries again.
-        throw new NonRecoverableException("", e);
+        return Deferred.fromError(new NonRecoverableException("", e));
     } catch (Exception e) {
       try {
         lock.release();
@@ -488,7 +488,7 @@ public class HBaseClient {
       return Deferred.fromResult(value);
     } catch (BusyLockException e) {
       // Wrap the busy lock exception as an HBaseException so that opentsdb tries again.
-      throw new NonRecoverableException("", e);
+      return Deferred.fromError(new NonRecoverableException("", e));
     } catch (Exception e) {
       try {
         lock.release();
