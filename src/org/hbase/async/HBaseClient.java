@@ -414,6 +414,7 @@ public class HBaseClient {
             edit.qualifier())
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
             .withConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM)
+            .withTtl(30)
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
       num_row_locks.incrementAndGet();
@@ -469,6 +470,7 @@ public class HBaseClient {
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, 
             TSDB_UID_ID_CAS, request.key)
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
+            .withTtl(30)
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
       num_row_locks.incrementAndGet();
