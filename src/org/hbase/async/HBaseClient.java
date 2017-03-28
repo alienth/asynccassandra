@@ -39,6 +39,7 @@ import com.netflix.astyanax.model.ColumnMap;
 import com.netflix.astyanax.model.ConsistencyLevel;
 import com.netflix.astyanax.query.ColumnFamilyQuery;
 import com.netflix.astyanax.query.RowQuery;
+import com.netflix.astyanax.recipes.locks.BusyLockException;
 import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
 import com.netflix.astyanax.retry.BoundedExponentialBackoff;
 import com.netflix.astyanax.serializers.BytesArraySerializer;
@@ -443,6 +444,9 @@ public class HBaseClient {
         LOG.error("Error releasing lock post exception for request: " + edit, e);
       }
       return Deferred.fromResult(false);
+    } catch (BusyLockException e) {
+        // Wrap the busy lock exception as an HBaseException so that opentsdb tries again.
+        throw new NonRecoverableException("", e);
     } catch (Exception e) {
       try {
         lock.release();
@@ -482,6 +486,9 @@ public class HBaseClient {
         .putColumn(qualifier, value, null);
       lock.releaseWithMutation(mutation);
       return Deferred.fromResult(value);
+    } catch (BusyLockException e) {
+      // Wrap the busy lock exception as an HBaseException so that opentsdb tries again.
+      throw new NonRecoverableException("", e);
     } catch (Exception e) {
       try {
         lock.release();
