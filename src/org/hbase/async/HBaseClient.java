@@ -208,35 +208,6 @@ public class HBaseClient {
     final Deferred<ArrayList<KeyValue>> deferred = 
         new Deferred<ArrayList<KeyValue>>();
     
-    class ResponseCB implements Runnable {
-      final ListenableFuture<OperationResult<ColumnList<byte[]>>> future;
-      public ResponseCB(final ListenableFuture<OperationResult<ColumnList<byte[]>>> future2) {
-        this.future = future2;
-      }
-      @Override
-      public void run() {
-        try {
-          // TODO - can track stats here
-          final ColumnList<byte[]> columns = future.get().getResult();
-          final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(columns.size());
-          final Iterator<Column<byte[]>> it = columns.iterator();
-          while (it.hasNext()) {
-            final Column<byte[]> column = it.next();
-            final KeyValue kv = new KeyValue(request.key, request.family(), 
-                column.getName(), column.getTimestamp() / 1000, // micro to ms 
-                column.getByteArrayValue());
-            kvs.add(kv);
-          }
-          deferred.callback(kvs);
-        } catch (InterruptedException e) {
-          deferred.callback(e);
-          Thread.currentThread().interrupt();
-        } catch (ExecutionException e) {
-          deferred.callback(e);
-        }
-      }
-    }
-    
     class FutureCB implements FutureCallback<OperationResult<ColumnList<byte[]>>> {
 
       @Override
