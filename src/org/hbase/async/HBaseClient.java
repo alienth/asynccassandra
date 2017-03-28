@@ -252,7 +252,6 @@ public class HBaseClient {
         future = query.withColumnSlice(
             Arrays.asList(request.qualifiers())).executeAsync();
       }
-      //future.addListener(new ResponseCB(future), executor);
       Futures.addCallback(future, new FutureCB(), service);
     } catch (ConnectionException e) {
       deferred.callback(e);
