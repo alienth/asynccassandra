@@ -431,11 +431,14 @@ public class HBaseClient {
         .putColumn(edit.qualifier(), edit.value(), null);
       
       if (value == null && (expected == null || expected.length < 1)) {
-        lock.releaseWithMutation(mutation);
+        // Have to separate the mutation and the release due to differing serialization types.
+        mutation.execute();
+        lock.release();
         return Deferred.fromResult(true);
       } else if (expected != null && value != null &&
           Bytes.memcmpMaybeNull(value, expected) == 0) {
-        lock.releaseWithMutation(mutation);
+        mutation.execute();
+        lock.release();
         return Deferred.fromResult(true);
       }
       
