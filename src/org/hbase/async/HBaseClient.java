@@ -28,6 +28,7 @@ import com.netflix.astyanax.MutationBatch;
 import com.netflix.astyanax.connectionpool.NodeDiscoveryType;
 import com.netflix.astyanax.connectionpool.OperationResult;
 import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
+import com.netflix.astyanax.connectionpool.exceptions.NotFoundException;
 import com.netflix.astyanax.connectionpool.impl.ConnectionPoolConfigurationImpl;
 import com.netflix.astyanax.connectionpool.impl.CountingConnectionPoolMonitor;
 import com.netflix.astyanax.impl.AstyanaxConfigurationImpl;
@@ -401,31 +402,37 @@ public class HBaseClient {
           "Increments are not supported on other tables yet"));
     }
     
-    final ColumnFamily<byte[], String> cf = 
+    final ColumnFamily<byte[], String> lockCf =
         Bytes.memcmp("id".getBytes(), edit.family) == 0 ? 
             TSDB_UID_ID_CAS : TSDB_UID_NAME_CAS;
+    final ColumnFamily<byte[], byte[]> cf =
+        Bytes.memcmp("id".getBytes(), edit.family) == 0 ?
+            TSDB_UID_ID : TSDB_UID_NAME;
     ColumnPrefixDistributedRowLock<byte[]> lock = 
-        new ColumnPrefixDistributedRowLock<byte[]>(keyspace, cf,
-            edit.key)
+        new ColumnPrefixDistributedRowLock<byte[]>(keyspace, lockCf,
+            edit.qualifier())
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
             .withConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM)
-            .withColumnPrefix(edit.qualifier().toString())
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
       num_row_locks.incrementAndGet();
-      final ColumnMap<String> columns = lock.acquireLockAndReadRow();
-      final String qualifier = new String(edit.qualifier());
+      lock.acquire();
+      byte[] value = null;
+      try {
+        value = keyspace.prepareQuery(cf).getKey(edit.key()).getColumn(edit.qualifier()).execute().getResult().getByteArrayValue();
+      } catch (NotFoundException e) {
+        // The common case - there is no value here.
+      }
       final MutationBatch mutation = keyspace.prepareMutationBatch();
       mutation.setConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM);
       mutation.withRow(cf, edit.key)
-        .putColumn(qualifier, edit.value(), null);
+        .putColumn(edit.qualifier(), edit.value(), null);
       
-      if (columns.get(qualifier) == null && (expected == null || expected.length < 1)) {
+      if (value == null && (expected == null || expected.length < 1)) {
         lock.releaseWithMutation(mutation);
         return Deferred.fromResult(true);
-      } else if (expected != null && columns.get(qualifier) != null &&
-          Bytes.memcmpMaybeNull(columns.get(qualifier).getByteArrayValue(), 
-              expected) == 0) {
+      } else if (expected != null && value != null &&
+          Bytes.memcmpMaybeNull(value, expected) == 0) {
         lock.releaseWithMutation(mutation);
         return Deferred.fromResult(true);
       }
