@@ -925,7 +925,7 @@ public final class Scanner implements Runnable {
       try {
         // LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
         final OperationResult<Rows<byte[], byte[]>> results =
-            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0])).getKeySlice(keys.subList(keyIndex, Math.min(keys.size() - 1, keyIndex + max_num_rows) )).execute();
+            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0])).getKeySlice(keys.subList(keyIndex, Math.min(keys.size(), keyIndex + max_num_rows) )).execute();
         keyIndex += results.getResult().size();
         iterator = results.getResult().iterator();
       } catch (ConnectionException e) {
