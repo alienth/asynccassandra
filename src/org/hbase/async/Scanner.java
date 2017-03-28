@@ -238,6 +238,10 @@ public final class Scanner implements Runnable {
   }
 
   public void addKey(final byte[] key) {
+    // TODO Clean this keys mess up.
+    if (keys == null) {
+      keys = new ArrayList<byte[]>();
+    }
     KeyValue.checkKey(key);
     checkScanningNotStarted();
     this.keys.add(key);
