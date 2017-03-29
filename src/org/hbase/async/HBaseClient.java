@@ -1,11 +1,14 @@
 package org.hbase.async;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -258,11 +261,34 @@ public class HBaseClient {
   static final short TIMESTAMP_BYTES = 4;
   static short SALT_WIDTH = 0;
 
-  private void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) {
+  private class MaxSizeHashMap<K, V> extends LinkedHashMap<K, V> {
+    private static final long serialVersionUID = 1L;
+    private final int maxSize;
+
+    public MaxSizeHashMap(int maxSize) {
+      this.maxSize = maxSize;
+    }
+
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+      return size() > maxSize;
+    }
+  }
+
+  private final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(30000);
+
+  private void indexMutation(byte[] orig_key, MutationBatch mutation) {
     // Take the metric of the orig key and put it in the new key
     // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
     // Take the timestamp of the orig key and put it in the column name.
     // Take only the tags from the orig key, and put them the column name.
+
+    synchronized (indexedKeys) {
+      if (indexedKeys.put(ByteBuffer.wrap(orig_key), true) != null) {
+        // We already indexed this key
+        return;
+      }
+    }
 
     final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
     final int tsInt = Bytes.getInt(ts);
@@ -274,7 +300,6 @@ public class HBaseClient {
     System.arraycopy(ts, 0, new_col, 0, ts.length);
     System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
 
-    // TODO - prevent duplicate puts here.
     mutation.withRow(TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
   }
 
@@ -282,7 +307,7 @@ public class HBaseClient {
     final Keyspace keyspace = getContext(request.table);
     final MutationBatch mutation = mutations.get(request.table);
     if (Bytes.memcmp("t".getBytes(), request.family) == 0) {
-      indexMutation(request.key, request.qualifier(), mutation);
+      indexMutation(request.key, mutation);
     }
     mutation.withRow(column_family_schemas.get(request.family), request.key)
       .putColumn(request.qualifier(), request.value());
