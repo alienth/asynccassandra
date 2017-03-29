@@ -3,6 +3,7 @@ package org.hbase.async;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -44,6 +45,7 @@ import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
 import com.netflix.astyanax.retry.BoundedExponentialBackoff;
 import com.netflix.astyanax.serializers.BytesArraySerializer;
 import com.netflix.astyanax.serializers.StringSerializer;
+import com.netflix.astyanax.thrift.AbstractThriftMutationBatchImpl;
 import com.netflix.astyanax.thrift.ThriftFamilyFactory;
 import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
@@ -92,7 +94,10 @@ public class HBaseClient {
   final ExecutorService executor = Executors.newFixedThreadPool(25);
   final ListeningExecutorService service = 
       MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(25));
-  
+  final ByteMap<AstyanaxContext<Keyspace>> contexts =
+      new ByteMap<AstyanaxContext<Keyspace>>();
+  final ByteMap<Keyspace> keyspaces = new ByteMap<Keyspace>();
+  final ByteMap<MutationBatch> mutations = new ByteMap<MutationBatch>();
   final ByteMap<ColumnFamily<byte[], byte[]>> column_family_schemas = 
       new ByteMap<ColumnFamily<byte[], byte[]>>();
   
@@ -100,11 +105,7 @@ public class HBaseClient {
   final ConnectionPoolConfigurationImpl pool;
   final CountingConnectionPoolMonitor monitor;
 
-  final AstyanaxContext<Keyspace> context;
-  final Keyspace keyspace;
-
-  MutationBatch buffered_mutations;
-  private final AtomicLong buffer_count = new AtomicLong();
+  final HashMap<MutationBatch, AtomicLong> buffer_tracker = new HashMap<MutationBatch, AtomicLong>();
   
   final byte[] tsdb_table;
   final byte[] tsdb_uid_table;
@@ -165,18 +166,6 @@ public class HBaseClient {
       pool.setLocalDatacenter(config.getString("asynccassandra.datacenter"));
     }
     monitor = new CountingConnectionPoolMonitor();
-    context = new AstyanaxContext.Builder()
-      .forCluster(config.getString("asynccassandra.cluster"))
-      .forKeyspace(config.getString("asynccassandra.keyspace"))
-      .withAstyanaxConfiguration(ast_config)
-      .withConnectionPoolConfiguration(pool)
-      .withConnectionPoolMonitor(monitor)
-      .buildKeyspace(ThriftFamilyFactory.getInstance());
-
-    keyspace = context.getClient();
-    context.start();
-    buffered_mutations = keyspace.prepareMutationBatch();
-
     METRICS_WIDTH = config.hasProperty("tsd.storage.uid.width.metric") ?
       config.getShort("tsd.storage.uid.width.metric") : 3;
     TAG_NAME_WIDTH = config.hasProperty("tsd.storage.uid.width.tagk") ?
@@ -202,6 +191,7 @@ public class HBaseClient {
   
   public Deferred<ArrayList<KeyValue>> get(final GetRequest request) {
     num_gets.incrementAndGet();
+    final Keyspace keyspace = getContext(request.table);
     if (request.family() == null) {
       throw new UnsupportedOperationException(
           "Can't scan cassandra without a column family: " + request);
@@ -289,19 +279,21 @@ public class HBaseClient {
   }
 
   public Deferred<Object> put(final PutRequest request) {
-    final MutationBatch mutation = keyspace.prepareMutationBatch();
+    final Keyspace keyspace = getContext(request.table);
+    final MutationBatch mutation = mutations.get(request.table);
     if (Bytes.memcmp("t".getBytes(), request.family) == 0) {
       indexMutation(request.key, request.qualifier(), mutation);
     }
     mutation.withRow(column_family_schemas.get(request.family), request.key)
       .putColumn(request.qualifier(), request.value());
-    synchronized (buffered_mutations) {
-      buffered_mutations.mergeShallow(mutation);
+    synchronized (mutation) {
+      mutation.mergeShallow(mutation);
+      AtomicLong buffer_count = buffer_tracker.get(mutation);
       final long count = buffer_count.incrementAndGet();
       if (count >= config.getInt("hbase.rpcs.batch.size")) {
         buffer_count.set(0);
-        final MutationBatch putBatch = buffered_mutations;
-        buffered_mutations = keyspace.prepareMutationBatch();
+        final MutationBatch putBatch = mutation;
+        mutations.put(request.table, keyspace.prepareMutationBatch());
         return putInternal(putBatch);
       } else {
         return Deferred.fromResult(null);
@@ -361,6 +353,7 @@ public class HBaseClient {
   public Deferred<Object> delete(final DeleteRequest request) {
     num_deletes.incrementAndGet();
     // TODO how do we batch?
+    final Keyspace keyspace = getContext(request.table);
     final Deferred<Object> deferred = new Deferred<Object>();
     final MutationBatch mutation = keyspace.prepareMutationBatch();
     
@@ -403,6 +396,7 @@ public class HBaseClient {
           "Increments are not supported on other tables yet"));
     }
     
+    final Keyspace keyspace = getContext(edit.table);
     final ColumnFamily<byte[], String> lockCf =
         Bytes.memcmp("id".getBytes(), edit.family) == 0 ? 
             TSDB_UID_ID_CAS : TSDB_UID_NAME_CAS;
@@ -469,6 +463,7 @@ public class HBaseClient {
           "Increments are not supported on other tables yet"));
     }
     
+    final Keyspace keyspace = getContext(request.table);
     ColumnPrefixDistributedRowLock<byte[]> lock = 
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, 
             TSDB_UID_ID_CAS, request.key)
@@ -560,7 +555,7 @@ public class HBaseClient {
   
   public Scanner newScanner(final byte[] table) {
     num_scanners_opened.incrementAndGet();
-    return new Scanner(this, executor, table, keyspace);
+    return new Scanner(this, executor, table, getContext(table));
   }
   
   public Scanner newScanner(final String table) {
@@ -586,7 +581,9 @@ public class HBaseClient {
   public Deferred<Object> shutdown() {
     try {
       // TODO - flag to prevent rpcs while shutting down
-      context.shutdown();
+      for (final AstyanaxContext<Keyspace> context : contexts.values()) {
+        context.shutdown();
+      }
       executor.shutdown();
     } catch (Exception e) {
       LOG.error("failed to close the contexts", e);
@@ -679,6 +676,39 @@ public class HBaseClient {
   }
   
   
+  private Keyspace getContext(final byte[] table) {
+    Keyspace keyspace = keyspaces.get(table);
+    if (keyspace == null) {
+      synchronized (keyspaces) {
+        // avoid race conditions where another thread put the client
+        keyspace = keyspaces.get(table);
+        AstyanaxContext<Keyspace> context = contexts.get(table);
+        if (context != null) {
+          LOG.warn("Context wasn't null for new keyspace " + Bytes.pretty(table));
+        }
+        context = new AstyanaxContext.Builder()
+          .forCluster(config.getString("asynccassandra.cluster"))
+          .forKeyspace(config.getString("asynccassandra.keyspace"))
+          .withAstyanaxConfiguration(ast_config)
+          .withConnectionPoolConfiguration(pool)
+          .withConnectionPoolMonitor(monitor)
+          .buildKeyspace(ThriftFamilyFactory.getInstance());
+        contexts.put(table, context);
+        context.start();
+
+        keyspace = context.getClient();
+
+        MutationBatch mutation = keyspace.prepareMutationBatch();
+        mutations.put(table, mutation);
+
+        buffer_tracker.put(mutation, new AtomicLong());
+
+        keyspaces.put(table, keyspace);
+      }
+    }
+    return keyspace;
+  }
+
   void incrementScans(){
     num_scans.incrementAndGet();
   }
