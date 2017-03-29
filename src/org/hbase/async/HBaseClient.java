@@ -108,7 +108,7 @@ public class HBaseClient {
   final ConnectionPoolConfigurationImpl pool;
   final CountingConnectionPoolMonitor monitor;
 
-  final HashMap<MutationBatch, AtomicLong> buffer_tracker = new HashMap<MutationBatch, AtomicLong>();
+  final ByteMap<AtomicLong> buffer_tracker = new ByteMap<AtomicLong>();
   
   final byte[] tsdb_table;
   final byte[] tsdb_uid_table;
@@ -305,19 +305,20 @@ public class HBaseClient {
 
   public Deferred<Object> put(final PutRequest request) {
     final Keyspace keyspace = getContext(request.table);
-    final MutationBatch mutation = mutations.get(request.table);
+    final MutationBatch mutation = keyspace.prepareMutationBatch();
+    final MutationBatch buffered_mutations = mutations.get(request.table);
+    final AtomicLong buffer_count = buffer_tracker.get(request.table);
     if (Bytes.memcmp("t".getBytes(), request.family) == 0) {
       indexMutation(request.key, mutation);
     }
     mutation.withRow(column_family_schemas.get(request.family), request.key)
       .putColumn(request.qualifier(), request.value());
-    synchronized (mutation) {
-      mutation.mergeShallow(mutation);
-      AtomicLong buffer_count = buffer_tracker.get(mutation);
+    synchronized (buffered_mutations) {
+      buffered_mutations.mergeShallow(mutation);
       final long count = buffer_count.incrementAndGet();
       if (count >= config.getInt("hbase.rpcs.batch.size")) {
         buffer_count.set(0);
-        final MutationBatch putBatch = mutation;
+        final MutationBatch putBatch = buffered_mutations;
         mutations.put(request.table, keyspace.prepareMutationBatch());
         return putInternal(putBatch);
       } else {
@@ -726,7 +727,7 @@ public class HBaseClient {
         MutationBatch mutation = keyspace.prepareMutationBatch();
         mutations.put(table, mutation);
 
-        buffer_tracker.put(mutation, new AtomicLong());
+        buffer_tracker.put(table, new AtomicLong());
 
         keyspaces.put(table, keyspace);
       }
