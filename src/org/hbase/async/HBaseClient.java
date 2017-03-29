@@ -306,21 +306,20 @@ public class HBaseClient {
   public Deferred<Object> put(final PutRequest request) {
     final Keyspace keyspace = getContext(request.table);
     final MutationBatch mutation = keyspace.prepareMutationBatch();
-    final MutationBatch buffered_mutations = mutations.get(request.table);
     final AtomicLong buffer_count = buffer_tracker.get(request.table);
     if (Bytes.memcmp("t".getBytes(), request.family) == 0) {
       indexMutation(request.key, mutation);
     }
     mutation.withRow(column_family_schemas.get(request.family), request.key)
       .putColumn(request.qualifier(), request.value());
-    synchronized (buffered_mutations) {
+    synchronized (mutations) {
+      final MutationBatch buffered_mutations = mutations.get(request.table);
       buffered_mutations.mergeShallow(mutation);
       final long count = buffer_count.incrementAndGet();
       if (count >= config.getInt("hbase.rpcs.batch.size")) {
         buffer_count.set(0);
-        final MutationBatch putBatch = buffered_mutations;
         mutations.put(request.table, keyspace.prepareMutationBatch());
-        return putInternal(putBatch);
+        return putInternal(buffered_mutations);
       } else {
         return Deferred.fromResult(null);
       }
