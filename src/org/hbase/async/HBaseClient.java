@@ -428,9 +428,12 @@ public class HBaseClient {
     final ColumnFamily<byte[], byte[]> cf =
         Bytes.memcmp("id".getBytes(), edit.family) == 0 ?
             TSDB_UID_ID : TSDB_UID_NAME;
+    final byte[] lockKey =
+        Bytes.memcmp("id".getBytes(), edit.family) == 0 ?
+            edit.qualifier() : edit.value();
     ColumnPrefixDistributedRowLock<byte[]> lock = 
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, lockCf,
-            edit.qualifier())
+            lockKey)
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
             .withConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM)
             .withTtl(30)
