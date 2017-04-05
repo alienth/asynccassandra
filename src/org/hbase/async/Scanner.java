@@ -917,8 +917,9 @@ public final class Scanner implements Runnable {
 
     Rows<byte[], byte[]> rows;
     try {
-    rows = keyspace.prepareQuery(HBaseClient.TSDB_T_INDEX).getKeySlice(indexKeys).withColumnRange(start_key_ts, stop_key_ts, false, Integer.MAX_VALUE)
-      .execute().getResult();
+      // TODO Maybe preserve the column range lookup here so we ignore month-long keys that have no data inside our requested range?
+      rows = keyspace.prepareQuery(HBaseClient.TSDB_T_INDEX).getKeySlice(indexKeys)
+        .execute().getResult();
     } catch (ConnectionException e) {
       deferred.callback(e);
       return;
@@ -926,8 +927,8 @@ public final class Scanner implements Runnable {
 
     for (Row<byte[], byte[]> row : rows) {
       for (Column<byte[]> column : row.getColumns()) {
-        byte[] fake_key = new byte[column.getName().length + metric_width];
-        System.arraycopy(column.getName(), HBaseClient.TIMESTAMP_BYTES, fake_key, key_width, fake_key.length - key_width);
+        byte[] fake_key = new byte[column.getName().length + key_width];
+        System.arraycopy(column.getName(), 0, fake_key, key_width, fake_key.length - key_width);
         if (filter != null) {
           final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
           if (!regex.matches(fake_key)) {
@@ -935,8 +936,7 @@ public final class Scanner implements Runnable {
           }
         }
         System.arraycopy(metric, 0, fake_key, 0, metric.length);
-        // TODO make the timestamp an offset.
-        System.arraycopy(column.getName(), 0, fake_key, metric_width, HBaseClient.TIMESTAMP_BYTES);
+        System.arraycopy(row.getKey(), 0, fake_key, 0, row.getKey().length);
         keys.add(fake_key);
       }
     }
@@ -989,8 +989,23 @@ public final class Scanner implements Runnable {
       // }
       while (colIterator.hasNext()) {
         final Column<byte[]> column = colIterator.next();
-        final KeyValue kv = new KeyValue(cur_row.getKey(), families[0],
-            column.getName(), column.getTimestamp() / 1000, // micro to ms
+
+        byte[] new_key = Arrays.copyOf(cur_row.getKey(), cur_row.getKey().length);
+
+        byte[] ts = Arrays.copyOfRange(new_key, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH + HBaseClient.TIMESTAMP_BYTES);
+        final int base_timestamp = Bytes.getInt(ts);
+
+        int qualifier = Bytes.getInt(column.getName());
+        int offset = qualifier >> 10;
+        short flags = (short) (qualifier & HBaseClient.FLAGS_MASK);
+
+        int new_offset = (offset % 3600) << 4;
+        final byte[] new_qual = Bytes.fromShort((short) (new_offset | flags));
+        final byte[] new_base = Bytes.fromInt((base_timestamp + offset) - ((base_timestamp + offset) % 3600));
+
+        System.arraycopy(new_base, 0, new_key, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH, new_base.length);
+        final KeyValue kv = new KeyValue(new_key, families[0],
+            new_qual, column.getTimestamp() / 1000, // micro to ms
             column.getByteArrayValue());
         kvs.add(kv);
       }
