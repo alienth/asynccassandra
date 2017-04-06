@@ -1060,7 +1060,7 @@ public final class Scanner implements Runnable {
         final int base_timestamp = Bytes.getInt(ts);
 
         int qualifier = Bytes.getInt(column.getName());
-        int offset = qualifier >> 10;
+        int offset = qualifier >>> 10;
         short flags = (short) (qualifier & HBaseClient.FLAGS_MASK);
 
         int new_offset = offset % 3600;
