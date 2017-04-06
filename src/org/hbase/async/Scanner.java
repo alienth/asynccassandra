@@ -32,6 +32,7 @@ import java.nio.charset.Charset;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
 
@@ -892,10 +893,10 @@ public final class Scanner implements Runnable {
   private ArrayList<byte[]> keys;
 
   private void buildKeys() {
-	  keys = new ArrayList<byte[]>();
+    batches = new HashMap<Integer, KeyBatch>();
 
     final byte[] start_key_ts = Arrays.copyOfRange(start_key, metric_width, key_width);
-    int startTs = Bytes.getInt(start_key_ts);
+    final int startTs = Bytes.getInt(start_key_ts);
 
     final byte[] stop_key_ts = Arrays.copyOfRange(stop_key, metric_width, key_width);
     final int stopTs = Bytes.getInt(stop_key_ts);
@@ -904,13 +905,14 @@ public final class Scanner implements Runnable {
 
     final int interval = 2419200;
 
-    startTs -= (startTs % interval);
+    int intervalTs = startTs;
+    intervalTs -= (intervalTs % interval);
 
     ArrayList<byte[]> indexKeys = new ArrayList<byte[]>();
-    for (; startTs<stopTs; startTs+=interval) {
+    for (; intervalTs<stopTs; intervalTs+=interval) {
       byte[] key = new byte[key_width];
       System.arraycopy(start_key, 0, key, 0, metric_width); // metric
-      System.arraycopy(Bytes.fromInt(startTs), 0, key, metric_width, HBaseClient.TIMESTAMP_BYTES); // new TS
+      System.arraycopy(Bytes.fromInt(intervalTs), 0, key, metric_width, HBaseClient.TIMESTAMP_BYTES); // new TS
       indexKeys.add(key);
     }
 
@@ -937,28 +939,88 @@ public final class Scanner implements Runnable {
         }
         System.arraycopy(metric, 0, fake_key, 0, metric.length);
         System.arraycopy(row.getKey(), 0, fake_key, 0, row.getKey().length);
-        keys.add(fake_key);
+
+        int batchKey = Bytes.getInt(row.getKey(), metric_width);
+        KeyBatch batch = batches.get(batchKey);
+        if (batch == null) {
+          batch = new KeyBatch();
+          batches.put(batchKey, batch);
+          // If the start_key is before this batch, then don't set start_col
+          // If the stop_key is after this batch, then don't set stop_col.
+          if (startTs > batchKey) {
+            batch.start_col = Bytes.fromInt((startTs - batchKey) << 10);
+          }
+          if (stopTs < (batchKey + interval)) {
+            batch.end_col = Bytes.fromInt((stopTs - batchKey) << 10);
+          }
+        }
+        batch.add(fake_key);
       }
     }
   }
 
-  private int keyIndex = 0;
+  private class KeyBatch {
+    ArrayList<ArrayList<byte[]>> keyLists = new ArrayList<ArrayList<byte[]>>();
+    public byte[] start_col = { 0 };
+    public byte[] end_col = Bytes.fromInt(-1); // 0xFFFFFFFF
 
+    private ArrayList<byte[]> list;
+    public void add(byte[] key) {
+      if (list == null || list.size() >= max_num_rows) {
+        list = new ArrayList<byte[]>(max_num_rows);
+        keyLists.add(list);
+      }
+      list.add(key);
+    }
+
+  }
+
+  private HashMap<Integer, KeyBatch> batches;
+
+
+  private Iterator<KeyBatch> batch_iterator;
+  private Iterator<ArrayList<byte[]>> slice_iterator;
+  private KeyBatch current_batch;
+
+  // I have a batch of keys, of which I need to iterate over.
+  // For each batch, I need to generate sublists.
+  // For each sublist, I need to execute a query to build an iterator.
+  // When an iterator runs out, I need to get the next sublist.
+  // When we run out of sublists, I need to get the next batch.
+  // When we run out of batches, we need to return null.
   public void scanDatapoints() {
-    if (keys == null) {
+    if (batches == null) {
       buildKeys();
-      if (keys.size() == 0) {
+      if (batches.size() == 0) {
         // No matching rows, apparently
         deferred.callback(null);
         return;
       }
+      batch_iterator = batches.values().iterator();
+      current_batch = batch_iterator.next();
+      slice_iterator = current_batch.keyLists.iterator();
     }
     if (iterator == null) {
+
+      if (!slice_iterator.hasNext()) {
+        if (batch_iterator.hasNext()) {
+          current_batch = batch_iterator.next();
+          slice_iterator = current_batch.keyLists.iterator();
+        } else {
+          deferred.callback(null);
+          return;
+        }
+
+      }
+
       try {
         // LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
         final OperationResult<Rows<byte[], byte[]>> results =
-            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0])).getKeySlice(keys.subList(keyIndex, Math.min(keys.size(), keyIndex + max_num_rows) )).execute();
-        keyIndex += results.getResult().size();
+            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
+              // .getKeySlice(keys.subList(keyIndex, Math.min(keys.size(), keyIndex + max_num_rows) ))
+              .getKeySlice(slice_iterator.next())
+              .withColumnRange(current_batch.start_col, current_batch.end_col, false, Integer.MAX_VALUE)
+              .execute();
         iterator = results.getResult().iterator();
       } catch (ConnectionException e) {
         deferred.callback(e);
@@ -966,6 +1028,7 @@ public final class Scanner implements Runnable {
       }
     }
 
+    // Dead code?
     if (!iterator.hasNext()) {
       deferred.callback(null);
       //return Deferred.fromResult(null);
@@ -973,25 +1036,25 @@ public final class Scanner implements Runnable {
     }
 
     final ArrayList<ArrayList<KeyValue>> rows =
-        new ArrayList<ArrayList<KeyValue>>(keys.size());
+        new ArrayList<ArrayList<KeyValue>>();
 
     int kv_count = 0;
 
     while (kv_count <= max_num_kvs && iterator.hasNext()) {
       final Row<byte[], byte[]> cur_row = iterator.next();
-      LOG.info("Looking at key " + Bytes.pretty(cur_row.getKey()));
+      // LOG.debug("Looking at key " + Bytes.pretty(cur_row.getKey()));
 
       ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
       // if (colIterator != null) {
       final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
-      LOG.info("Column names " + cur_row.getColumns().getColumnNames());
+      // LOG.debug("Column names " + cur_row.getColumns().getColumnNames());
       // colIterator = cur_row.getColumns().iterator();
       // }
       byte[] last_key = EMPTY_ARRAY;
       while (colIterator.hasNext()) {
         final Column<byte[]> column = colIterator.next();
 
-        byte[] new_key = Arrays.copyOf(cur_row.getKey(), cur_row.getKey().length);
+        byte[] new_key = cur_row.getKey().clone();
 
         byte[] ts = Arrays.copyOfRange(new_key, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH + HBaseClient.TIMESTAMP_BYTES);
         final int base_timestamp = Bytes.getInt(ts);
@@ -1024,7 +1087,7 @@ public final class Scanner implements Runnable {
       }
     }
 
-    if (!iterator.hasNext() && keyIndex < keys.size() - 1) {
+    if (!iterator.hasNext()) {
       iterator = null;
     }
 
