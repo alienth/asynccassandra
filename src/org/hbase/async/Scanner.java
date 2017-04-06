@@ -981,12 +981,13 @@ public final class Scanner implements Runnable {
       final Row<byte[], byte[]> cur_row = iterator.next();
       LOG.info("Looking at key " + Bytes.pretty(cur_row.getKey()));
 
-      final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
+      ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
       // if (colIterator != null) {
       final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
       LOG.info("Column names " + cur_row.getColumns().getColumnNames());
       // colIterator = cur_row.getColumns().iterator();
       // }
+      byte[] last_key = EMPTY_ARRAY;
       while (colIterator.hasNext()) {
         final Column<byte[]> column = colIterator.next();
 
@@ -999,11 +1000,19 @@ public final class Scanner implements Runnable {
         int offset = qualifier >> 10;
         short flags = (short) (qualifier & HBaseClient.FLAGS_MASK);
 
-        int new_offset = (offset % 3600) << 4;
-        final byte[] new_qual = Bytes.fromShort((short) (new_offset | flags));
+        int new_offset = offset % 3600;
+        final byte[] new_qual = Bytes.fromShort((short) ((new_offset << 4) | flags));
         final byte[] new_base = Bytes.fromInt((base_timestamp + offset) - ((base_timestamp + offset) % 3600));
 
         System.arraycopy(new_base, 0, new_key, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH, new_base.length);
+
+        if (kvs.size() > 0 && Bytes.memcmp(last_key, new_key) != 0) {
+          rows.add(kvs);
+          kv_count += kvs.size();
+          kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
+        }
+        last_key = new_key;
+
         final KeyValue kv = new KeyValue(new_key, families[0],
             new_qual, column.getTimestamp() / 1000, // micro to ms
             column.getByteArrayValue());
