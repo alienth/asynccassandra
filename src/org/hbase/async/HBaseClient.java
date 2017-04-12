@@ -236,7 +236,7 @@ public class HBaseClient {
       final ListenableFuture<OperationResult<ColumnList<byte[]>>> future; 
       final ColumnFamilyQuery<byte[], byte[]> cfquery = keyspace.prepareQuery(
           column_family_schemas.get(request.family()));
-      if (Bytes.memcmp(tsdb_uid_table, request.table()) != 0) {
+      if (Bytes.memcmp(tsdb_uid_table, request.table()) == 0) {
         // Force quorum lookups for IDs
         cfquery.setConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM);
       }
