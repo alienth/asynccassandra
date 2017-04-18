@@ -926,7 +926,7 @@ public final class Scanner implements Runnable {
       deferred.callback(e);
       return;
     }
-
+    int keyCount = 0;
     for (Row<byte[], byte[]> row : rows) {
       for (Column<byte[]> column : row.getColumns()) {
         byte[] fake_key = new byte[column.getName().length + key_width];
@@ -951,12 +951,15 @@ public final class Scanner implements Runnable {
             batch.start_col = Bytes.fromInt((startTs - batchKey) << 10);
           }
           if (stopTs < (batchKey + interval)) {
+            // FIXME - this end col will chop off the last datapoint as it ends before the offset.
             batch.end_col = Bytes.fromInt((stopTs - batchKey) << 10);
           }
         }
         batch.add(fake_key);
+        keyCount++;
       }
     }
+    LOG.warn("I'll be scanning " + keyCount + " keys.");
   }
 
   private class KeyBatch {
@@ -1014,7 +1017,7 @@ public final class Scanner implements Runnable {
       }
 
       try {
-        // LOG.info("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
+        // LOG.warn("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
         final OperationResult<Rows<byte[], byte[]>> results =
             keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
               // .getKeySlice(keys.subList(keyIndex, Math.min(keys.size(), keyIndex + max_num_rows) ))

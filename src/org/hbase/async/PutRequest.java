@@ -87,6 +87,10 @@ public final class PutRequest extends BatchableRpc
   private final byte[][] qualifiers;
   private final byte[][] values;
 
+  protected final byte[] metric;
+  protected final byte[] ts;
+  protected final byte[] tags;
+
   /**
    * Constructor using current time.
    * <strong>These byte arrays will NOT be copied.</strong>
@@ -347,9 +351,24 @@ public final class PutRequest extends BatchableRpc
          timestamp, lockid);
   }
 
+
   /** Private constructor.  */
   private PutRequest(final byte[] table,
                      final byte[] key,
+                     final byte[] family,
+                     final byte[][] qualifiers,
+                     final byte[][] values,
+                     final long timestamp,
+                     final long lockid) {
+    this(table, null, null, null, key, family, qualifiers, values, timestamp, lockid);
+  }
+
+  /** Private constructor.  */
+  private PutRequest(final byte[] table,
+                     final byte[] key,
+                     final byte[] metric,
+                     final byte[] ts,
+                     final byte[] tags,
                      final byte[] family,
                      final byte[][] qualifiers,
                      final byte[][] values,
@@ -367,6 +386,9 @@ public final class PutRequest extends BatchableRpc
       KeyValue.checkQualifier(qualifiers[i]);
       KeyValue.checkValue(values[i]);
     }
+    this.metric = metric;
+    this.ts = ts;
+    this.tags = tags;
     this.qualifiers = qualifiers;
     this.values = values;
   }
