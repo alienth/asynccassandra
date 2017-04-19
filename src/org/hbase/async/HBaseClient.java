@@ -184,6 +184,7 @@ public class HBaseClient {
     tsdb_uid_table = config.getString("tsd.storage.hbase.uid_table").getBytes();
     
     column_family_schemas.put("t".getBytes(), TSDB_T);
+    column_family_schemas.put("tindex".getBytes(), TSDB_T_INDEX);
     column_family_schemas.put("name".getBytes(), TSDB_UID_NAME);
     column_family_schemas.put("id".getBytes(), TSDB_UID_ID);
   }
@@ -277,134 +278,130 @@ public class HBaseClient {
 
   private final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(30000);
 
-  private void indexMutation(byte[] orig_key, MutationBatch mutation) {
-    // Take the metric of the orig key and put it in the new key
-    // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
-    // Take the timestamp of the orig key and put it in the column name.
-    // Take only the tags from the orig key, and put them the column name.
+  // private void indexMutation(byte[] orig_key, MutationBatch mutation) {
+  //   // Take the metric of the orig key and put it in the new key
+  //   // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
+  //   // Take the timestamp of the orig key and put it in the column name.
+  //   // Take only the tags from the orig key, and put them the column name.
 
-    synchronized (indexedKeys) {
-      if (indexedKeys.put(ByteBuffer.wrap(orig_key), true) != null) {
-        // We already indexed this key
-        return;
-      }
-    }
+  //   synchronized (indexedKeys) {
+  //     if (indexedKeys.put(ByteBuffer.wrap(orig_key), true) != null) {
+  //       // We already indexed this key
+  //       return;
+  //     }
+  //   }
 
-    // Take the tags out of the orig key and place them in the column
-    final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
-    final int tsInt = Bytes.getInt(ts);
-    int month = tsInt - (tsInt % (86400 * 28));
-    byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
-    final byte[] new_col = Arrays.copyOfRange(orig_key, METRICS_WIDTH + SALT_WIDTH + TIMESTAMP_BYTES, orig_key.length);
-    System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
-    System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
-    // System.arraycopy(ts, 0, new_col, 0, ts.length);
-    // System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
+  //   // Take the tags out of the orig key and place them in the column
+  //   final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
+  //   final int tsInt = Bytes.getInt(ts);
+  //   int month = tsInt - (tsInt % (86400 * 28));
+  //   byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
+  //   final byte[] new_col = Arrays.copyOfRange(orig_key, METRICS_WIDTH + SALT_WIDTH + TIMESTAMP_BYTES, orig_key.length);
+  //   System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
+  //   System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
+  //   // System.arraycopy(ts, 0, new_col, 0, ts.length);
+  //   // System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
 
-    mutation.withRow(TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
-  }
+  //   mutation.withRow(TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
+  // }
 
-  /** Mask for the millisecond qualifier flag */
-  public static final byte MS_BYTE_FLAG = (byte)0xF0;
+  // /** Mask for the millisecond qualifier flag */
+  // public static final byte MS_BYTE_FLAG = (byte)0xF0;
 
-  /** Flag to set on millisecond qualifier timestamps */
-  public static final int MS_FLAG = 0xF0000000;
+  // /** Flag to set on millisecond qualifier timestamps */
+  // public static final int MS_FLAG = 0xF0000000;
 
-  /** Number of LSBs in time_deltas reserved for flags.  */
-  public static final short FLAG_BITS = 4;
+  // /** Number of LSBs in time_deltas reserved for flags.  */
+  // public static final short FLAG_BITS = 4;
 
-  /** Number of LSBs in time_deltas reserved for flags.  */
-  public static final short MS_FLAG_BITS = 6;
+  // /** Number of LSBs in time_deltas reserved for flags.  */
+  // public static final short MS_FLAG_BITS = 6;
 
-  /**
-   * When this bit is set, the value is a floating point value.
-   * Otherwise it's an integer value.
-   */
-  public static final short FLAG_FLOAT = 0x8;
+  // /**
+  //  * When this bit is set, the value is a floating point value.
+  //  * Otherwise it's an integer value.
+  //  */
+  // public static final short FLAG_FLOAT = 0x8;
 
-  /** Mask to select the size of a value from the qualifier.  */
-  public static final short LENGTH_MASK = 0x7;
+  // /** Mask to select the size of a value from the qualifier.  */
+  // public static final short LENGTH_MASK = 0x7;
 
-  /** Mask to select all the FLAG_BITS.  */
-  public static final short FLAGS_MASK = FLAG_FLOAT | LENGTH_MASK;
+  // /** Mask to select all the FLAG_BITS.  */
+  // public static final short FLAGS_MASK = FLAG_FLOAT | LENGTH_MASK;
 
-  public static int getOffsetFromQualifier(final byte[] qualifier, 
-      final int offset) {
-    // validateQualifier(qualifier, offset);
-    if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
-      return (int)(Bytes.getUnsignedInt(qualifier, offset) & 0x0FFFFFC0) 
-        >>> MS_FLAG_BITS;
-    } else {
-      final int seconds = (Bytes.getUnsignedShort(qualifier, offset) & 0xFFFF) 
-        >>> FLAG_BITS;
-      return seconds * 1000;
-    }
-  }
+  // public static int getOffsetFromQualifier(final byte[] qualifier, 
+  //     final int offset) {
+  //   // validateQualifier(qualifier, offset);
+  //   if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
+  //     return (int)(Bytes.getUnsignedInt(qualifier, offset) & 0x0FFFFFC0) 
+  //       >>> MS_FLAG_BITS;
+  //   } else {
+  //     final int seconds = (Bytes.getUnsignedShort(qualifier, offset) & 0xFFFF) 
+  //       >>> FLAG_BITS;
+  //     return seconds * 1000;
+  //   }
+  // }
 
- public static short getFlagsFromQualifier(final byte[] qualifier, 
-      final int offset) {
-    // validateQualifier(qualifier, offset);
-    if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
-      return (short) (qualifier[offset + 3] & FLAGS_MASK); 
-    } else {
-      return (short) (qualifier[offset + 1] & FLAGS_MASK);
-    }
-  }
-
-
-
-  private void tMutation(PutRequest request, MutationBatch mutation) {
-    // Take the timestamp of the orig key, normalize it to the 28-day period, and put it in the new key.
-    // Take the metric + tags of the orig key and put it in the new key.
-    // Take the offset from the column, add it to the difference between the orig ts and the new base, and put it in the column.
-    //
-    // If the column is in seconds, we'll use 22 bits to store the offset.
-    // If the column is in MS, we'll need 31 bits to store the offset. - DEPRECATING
-    // We need 4 bits for the format flag.
-
-    final byte[] ts = Arrays.copyOfRange(request.key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
-    final int tsInt = Bytes.getInt(ts);
-    int month = tsInt - (tsInt % (86400 * 28));
-
-    final int offset = (tsInt - month) + (getOffsetFromQualifier(request.qualifier(), 0) / 1000);
-    final int flags = getFlagsFromQualifier(request.qualifier(), 0);
-    final byte[] new_col = Bytes.fromInt(offset << 10 | flags);
+ // public static short getFlagsFromQualifier(final byte[] qualifier, 
+  //     final int offset) {
+  //   // validateQualifier(qualifier, offset);
+  //   if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
+  //     return (short) (qualifier[offset + 3] & FLAGS_MASK); 
+  //   } else {
+  //     return (short) (qualifier[offset + 1] & FLAGS_MASK);
+  //   }
+  // }
 
 
-    byte[] new_key = Arrays.copyOf(request.key, request.key.length);
-    System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
 
-    // byte[] new_col = new byte[new_offset.length + flags.length];
-    // System.arraycopy(new_offset, 0, new_col, 0, new_offset.length);
-    // System.arraycopy(flags, 0, new_col, new_offset.length, flags.length);
-    mutation.withRow(column_family_schemas.get(request.family), new_key)
-      .putColumn(new_col, request.value());
+  // private void tMutation(PutRequest request, MutationBatch mutation) {
+  //   // Take the timestamp of the orig key, normalize it to the 28-day period, and put it in the new key.
+  //   // Take the metric + tags of the orig key and put it in the new key.
+  //   // Take the offset from the column, add it to the difference between the orig ts and the new base, and put it in the column.
+  //   //
+  //   // If the column is in seconds, we'll use 22 bits to store the offset.
+  //   // If the column is in MS, we'll need 31 bits to store the offset. - DEPRECATING
+  //   // We need 4 bits for the format flag.
 
-    // TODO: We only need to check this once a month now.
-    synchronized (indexedKeys) {
-      if (indexedKeys.put(ByteBuffer.wrap(request.key), true) != null) {
-        // We already indexed this key
-        return;
-      }
-    }
+  //   final byte[] ts = Arrays.copyOfRange(request.key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
+  //   final int tsInt = Bytes.getInt(ts);
+  //   int month = tsInt - (tsInt % (86400 * 28));
 
-    // Take the tags out of the orig key and place them in the column
-    byte[] index_key = Arrays.copyOfRange(new_key, 0, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES);
-    final byte[] index_col = Arrays.copyOfRange(request.key, METRICS_WIDTH + SALT_WIDTH + TIMESTAMP_BYTES, request.key.length);
+  //   final int offset = (tsInt - month) + (getOffsetFromQualifier(request.qualifier(), 0) / 1000);
+  //   final int flags = getFlagsFromQualifier(request.qualifier(), 0);
+  //   final byte[] new_col = Bytes.fromInt(offset << 10 | flags);
 
-    mutation.withRow(TSDB_T_INDEX, index_key).putColumn(index_col, new byte[]{0});
-  }
+
+  //   byte[] new_key = Arrays.copyOf(request.key, request.key.length);
+  //   System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
+
+  //   // byte[] new_col = new byte[new_offset.length + flags.length];
+  //   // System.arraycopy(new_offset, 0, new_col, 0, new_offset.length);
+  //   // System.arraycopy(flags, 0, new_col, new_offset.length, flags.length);
+  //   mutation.withRow(column_family_schemas.get(request.family), new_key)
+  //     .putColumn(new_col, request.value());
+
+  //   // TODO: We only need to check this once a month now.
+  //   synchronized (indexedKeys) {
+  //     if (indexedKeys.put(ByteBuffer.wrap(request.key), true) != null) {
+  //       // We already indexed this key
+  //       return;
+  //     }
+  //   }
+
+  //   // Take the tags out of the orig key and place them in the column
+  //   byte[] index_key = Arrays.copyOfRange(new_key, 0, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES);
+  //   final byte[] index_col = Arrays.copyOfRange(request.key, METRICS_WIDTH + SALT_WIDTH + TIMESTAMP_BYTES, request.key.length);
+
+  //   mutation.withRow(TSDB_T_INDEX, index_key).putColumn(index_col, new byte[]{0});
+  // }
 
   public Deferred<Object> put(final PutRequest request) {
     final Keyspace keyspace = getContext(request.table);
     final MutationBatch mutation = keyspace.prepareMutationBatch();
     final AtomicLong buffer_count = buffer_tracker.get(request.table);
-    if (Bytes.memcmp("t".getBytes(), request.family) == 0) {
-      tMutation(request, mutation);
-    } else {
-      mutation.withRow(column_family_schemas.get(request.family), request.key)
-        .putColumn(request.qualifier(), request.value());
-    }
+    mutation.withRow(column_family_schemas.get(request.family), request.key)
+      .putColumn(request.qualifier(), request.value());
     synchronized (mutations) {
       final MutationBatch buffered_mutations = mutations.get(request.table);
       buffered_mutations.mergeShallow(mutation);
@@ -424,24 +421,7 @@ public class HBaseClient {
     final Deferred<Object> deferred = new Deferred<Object>();
     try {
       final ListenableFuture<OperationResult<Void>> future = mutation.executeAsync();
-      
-      class ResponseCB implements Runnable {
-        @Override
-        public void run() {
-          try {
-            future.get().getResult();
-            deferred.callback(null);
-          } catch (InterruptedException e) {
-            deferred.callback(e);
-            Thread.currentThread().interrupt();
-          } catch (ExecutionException e) {
-            deferred.callback(e);
-          }
-        }
-      }
-      
       class PutCB implements FutureCallback<OperationResult<Void>> {
-
         @Override
         public void onFailure(Throwable e) {
           deferred.callback(e);
@@ -451,10 +431,7 @@ public class HBaseClient {
         public void onSuccess(OperationResult<Void> arg0) {
           deferred.callback(null);
         }
-        
       }
-      
-      //future.addListener(new ResponseCB(), executor);
       Futures.addCallback(future, new PutCB(), service);
     } catch (ConnectionException e) {
       deferred.callback(e);
