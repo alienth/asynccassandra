@@ -115,6 +115,18 @@ public final class PutRequest extends BatchableRpc
          KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
   }
 
+  public PutRequest(final byte[] table,
+                    final byte[] key,
+                    final byte[] metric,
+                    final byte[] ts,
+                    final byte[] tags,
+                    final byte[] family,
+                    final byte[] qualifier,
+                    final byte[] value) {
+    this(table, key, metric, ts, tags, family, qualifier, value,
+         KeyValue.TIMESTAMP_NOW, RowLock.NO_LOCK);
+  }
+
   /**
    * Constructor for multiple columns using current time.
    * <strong>These byte arrays will NOT be copied.</strong>
@@ -306,38 +318,38 @@ public final class PutRequest extends BatchableRpc
          KeyValue.TIMESTAMP_NOW, lock.id());
   }
 
-  /**
-   * Constructor from a {@link KeyValue}.
-   * @param table The table to edit.
-   * @param kv The {@link KeyValue} to store.
-   * @since 1.1
-   */
-  public PutRequest(final byte[] table,
-                    final KeyValue kv) {
-    this(table, kv, RowLock.NO_LOCK);
-  }
+  // /**
+  //  * Constructor from a {@link KeyValue}.
+  //  * @param table The table to edit.
+  //  * @param kv The {@link KeyValue} to store.
+  //  * @since 1.1
+  //  */
+  // public PutRequest(final byte[] table,
+  //                   final KeyValue kv) {
+  //   this(table, kv, RowLock.NO_LOCK);
+  // }
 
-  /**
-   * Constructor from a {@link KeyValue} with an explicit row lock.
-   * @param table The table to edit.
-   * @param kv The {@link KeyValue} to store.
-   * @param lock An explicit row lock to use with this request.
-   * @since 1.1
-   */
-  public PutRequest(final byte[] table,
-                    final KeyValue kv,
-                    final RowLock lock) {
-    this(table, kv, lock.id());
-  }
+  // /**
+  //  * Constructor from a {@link KeyValue} with an explicit row lock.
+  //  * @param table The table to edit.
+  //  * @param kv The {@link KeyValue} to store.
+  //  * @param lock An explicit row lock to use with this request.
+  //  * @since 1.1
+  //  */
+  // public PutRequest(final byte[] table,
+  //                   final KeyValue kv,
+  //                   final RowLock lock) {
+  //   this(table, kv, lock.id());
+  // }
 
-  /** Private constructor.  */
-  private PutRequest(final byte[] table,
-                     final KeyValue kv,
-                     final long lockid) {
-    super(table, kv.key(), kv.family(), kv.timestamp(), lockid);
-    this.qualifiers = new byte[][] { kv.qualifier() };
-    this.values = new byte[][] { kv.value() };
-  }
+  // /** Private constructor.  */
+  // private PutRequest(final byte[] table,
+  //                    final KeyValue kv,
+  //                    final long lockid) {
+  //   super(table, kv.key(), kv.family(), kv.timestamp(), lockid);
+  //   this.qualifiers = new byte[][] { kv.qualifier() };
+  //   this.values = new byte[][] { kv.value() };
+  // }
 
   /** Private constructor.  */
   private PutRequest(final byte[] table,
@@ -351,6 +363,20 @@ public final class PutRequest extends BatchableRpc
          timestamp, lockid);
   }
 
+  /** Private constructor.  */
+  private PutRequest(final byte[] table,
+                     final byte[] key,
+                     final byte[] metric,
+                     final byte[] ts,
+                     final byte[] tags,
+                     final byte[] family,
+                     final byte[] qualifier,
+                     final byte[] value,
+                     final long timestamp,
+                     final long lockid) {
+    this(table, key, metric, ts, tags, family, new byte[][] { qualifier }, new byte[][] { value },
+         timestamp, lockid);
+  }
 
   /** Private constructor.  */
   private PutRequest(final byte[] table,
@@ -360,7 +386,7 @@ public final class PutRequest extends BatchableRpc
                      final byte[][] values,
                      final long timestamp,
                      final long lockid) {
-    this(table, null, null, null, key, family, qualifiers, values, timestamp, lockid);
+    this(table, key, null, null, null, family, qualifiers, values, timestamp, lockid);
   }
 
   /** Private constructor.  */
