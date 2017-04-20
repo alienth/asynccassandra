@@ -672,4 +672,13 @@ public final class Bytes {
 
   }
 
+  public static int indexOf(byte[] array, byte search) {
+    for (int i = 0; i < array.length; i++) {
+      if (array[i] == search) {
+        return i;
+      }
+    }
+    return -1;
+  }
+ 
 }
