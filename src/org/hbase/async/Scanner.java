@@ -26,12 +26,8 @@
  */
 package org.hbase.async;
 
-import java.lang.Thread;
-import java.io.IOException;
 import java.nio.charset.Charset;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
@@ -43,11 +39,8 @@ import com.netflix.astyanax.Keyspace;
 import com.netflix.astyanax.connectionpool.OperationResult;
 import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
 import com.netflix.astyanax.model.Column;
-import com.netflix.astyanax.model.ColumnList;
 import com.netflix.astyanax.model.Row;
 import com.netflix.astyanax.model.Rows;
-import com.netflix.astyanax.query.RowQuery;
-import com.netflix.astyanax.util.RangeBuilder;
 import com.stumbleupon.async.Deferred;
 
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
@@ -189,10 +182,6 @@ public final class Scanner implements Runnable {
   
   private Deferred<ArrayList<ArrayList<KeyValue>>> deferred;
 
-  static short metric_width = 3;
-  static short key_width = 7;
-  static short tag_width = 6;
-
   /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
@@ -205,9 +194,6 @@ public final class Scanner implements Runnable {
     this.table = table;
     this.keyspace = keyspace;
 
-    metric_width = (short) (HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH);
-    key_width = (short) (metric_width + HBaseClient.TIMESTAMP_BYTES);
-    tag_width = (short) (HBaseClient.TAG_NAME_WIDTH + HBaseClient.TAG_VALUE_WIDTH);
   }
 
   /**
@@ -284,6 +270,24 @@ public final class Scanner implements Runnable {
     KeyValue.checkKey(stop_key);
     checkScanningNotStarted();
     this.stop_key = stop_key;
+  }
+
+  public void setIndexKeys(final ArrayList<byte[]> keys) {
+    checkScanningNotStarted();
+    this.indexKeys = keys;
+  }
+
+  public void setMetric(byte[] metric) {
+    checkScanningNotStarted();
+    this.metric = metric;
+  }
+
+  public void setStartTimestamp(int start) {
+    this.start_ts = start;
+  }
+
+  public void setStopTimestamp(int stop) {
+    this.stop_ts = stop;
   }
 
   /**
@@ -890,32 +894,17 @@ public final class Scanner implements Runnable {
     }
   }
 
+  private byte[] metric;
+  private int start_ts;
+  private int stop_ts;
+  private ArrayList<byte[]> indexKeys;
   private ArrayList<byte[]> keys;
+
+  // TODO: Don't duplicate this here.
+  private static final int MAX_TIMESPAN = 2419200;
 
   private void buildKeys() {
     batches = new HashMap<Integer, KeyBatch>();
-
-    final byte[] start_key_ts = Arrays.copyOfRange(start_key, metric_width, key_width);
-    final int startTs = Bytes.getInt(start_key_ts);
-
-    final byte[] stop_key_ts = Arrays.copyOfRange(stop_key, metric_width, key_width);
-    final int stopTs = Bytes.getInt(stop_key_ts);
-
-    final byte[] metric = Arrays.copyOfRange(start_key, 0, metric_width);
-
-    final int interval = 2419200;
-
-    int intervalTs = startTs;
-    intervalTs -= (intervalTs % interval);
-
-    ArrayList<byte[]> indexKeys = new ArrayList<byte[]>();
-    for (; intervalTs<stopTs; intervalTs+=interval) {
-      byte[] key = new byte[key_width];
-      System.arraycopy(start_key, 0, key, 0, metric_width); // metric
-      System.arraycopy(Bytes.fromInt(intervalTs), 0, key, metric_width, HBaseClient.TIMESTAMP_BYTES); // new TS
-      indexKeys.add(key);
-    }
-
 
     Rows<byte[], byte[]> rows;
     try {
@@ -928,6 +917,7 @@ public final class Scanner implements Runnable {
     }
     int keyCount = 0;
     for (Row<byte[], byte[]> row : rows) {
+      final int key_width = row.getKey().length;
       for (Column<byte[]> column : row.getColumns()) {
         byte[] fake_key = new byte[column.getName().length + key_width];
         System.arraycopy(column.getName(), 0, fake_key, key_width, fake_key.length - key_width);
@@ -937,22 +927,21 @@ public final class Scanner implements Runnable {
             continue;
           }
         }
-        System.arraycopy(metric, 0, fake_key, 0, metric.length);
         System.arraycopy(row.getKey(), 0, fake_key, 0, row.getKey().length);
 
-        int batchKey = Bytes.getInt(row.getKey(), metric_width);
+        int batchKey = Bytes.getInt(row.getKey(), metric.length + 1);
         KeyBatch batch = batches.get(batchKey);
         if (batch == null) {
           batch = new KeyBatch();
           batches.put(batchKey, batch);
           // If the start_key is before this batch, then don't set start_col
           // If the stop_key is after this batch, then don't set stop_col.
-          if (startTs > batchKey) {
-            batch.start_col = Bytes.fromInt((startTs - batchKey) << 10);
+          if (start_ts > batchKey) {
+            batch.start_col = Bytes.fromInt((start_ts - batchKey) << 10);
           }
-          if (stopTs < (batchKey + interval)) {
+          if (stop_ts < (batchKey + MAX_TIMESPAN)) {
             // FIXME - this end col will chop off the last datapoint as it ends before the offset.
-            batch.end_col = Bytes.fromInt((stopTs - batchKey) << 10);
+            batch.end_col = Bytes.fromInt((stop_ts - batchKey) << 10);
           }
         }
         batch.add(fake_key);
@@ -1038,6 +1027,8 @@ public final class Scanner implements Runnable {
       return;
     }
 
+    // TODO - Use less memory here by not duplicating the row key constantly.
+    // Put all datapoints with the same key in a single row.
     final ArrayList<ArrayList<KeyValue>> rows =
         new ArrayList<ArrayList<KeyValue>>();
 
@@ -1057,21 +1048,7 @@ public final class Scanner implements Runnable {
       while (colIterator.hasNext()) {
         final Column<byte[]> column = colIterator.next();
 
-        byte[] new_key = cur_row.getKey().clone();
-
-        byte[] ts = Arrays.copyOfRange(new_key, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH + HBaseClient.TIMESTAMP_BYTES);
-        final int base_timestamp = Bytes.getInt(ts);
-
-        int qualifier = Bytes.getInt(column.getName());
-        int offset = qualifier >>> 10;
-        short flags = (short) (qualifier & HBaseClient.FLAGS_MASK);
-
-        int new_offset = offset % 3600;
-        final byte[] new_qual = Bytes.fromShort((short) ((new_offset << 4) | flags));
-        final byte[] new_base = Bytes.fromInt((base_timestamp + offset) - ((base_timestamp + offset) % 3600));
-
-        System.arraycopy(new_base, 0, new_key, HBaseClient.SALT_WIDTH + HBaseClient.METRICS_WIDTH, new_base.length);
-
+        final byte[] new_key = cur_row.getKey();
         if (kvs.size() > 0 && Bytes.memcmp(last_key, new_key) != 0) {
           rows.add(kvs);
           kv_count += kvs.size();
@@ -1080,7 +1057,7 @@ public final class Scanner implements Runnable {
         last_key = new_key;
 
         final KeyValue kv = new KeyValue(new_key, families[0],
-            new_qual, column.getTimestamp() / 1000, // micro to ms
+            column.getName(), column.getTimestamp() / 1000, // micro to ms
             column.getByteArrayValue());
         kvs.add(kv);
       }
