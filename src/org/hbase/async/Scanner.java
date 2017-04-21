@@ -940,8 +940,7 @@ public final class Scanner implements Runnable {
             batch.start_col = Bytes.fromInt((start_ts - batchKey) << 10);
           }
           if (stop_ts < (batchKey + MAX_TIMESPAN)) {
-            // FIXME - this end col will chop off the last datapoint as it ends before the offset.
-            batch.end_col = Bytes.fromInt((stop_ts - batchKey) << 10);
+            Bytes.setInt(batch.end_col, (stop_ts - batchKey) << 10, 0);
           }
         }
         batch.add(fake_key);
@@ -954,7 +953,7 @@ public final class Scanner implements Runnable {
   private class KeyBatch {
     ArrayList<ArrayList<byte[]>> keyLists = new ArrayList<ArrayList<byte[]>>();
     public byte[] start_col = { 0 };
-    public byte[] end_col = Bytes.fromInt(-1); // 0xFFFFFFFF
+    public byte[] end_col = Bytes.fromLong(-1); // 0xFFFFFFFFFFFFFFFF
 
     private ArrayList<byte[]> list;
     public void add(byte[] key) {
