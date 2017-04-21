@@ -937,10 +937,12 @@ public final class Scanner implements Runnable {
           // If the start_key is before this batch, then don't set start_col
           // If the stop_key is after this batch, then don't set stop_col.
           if (start_ts > batchKey) {
-            batch.start_col = Bytes.fromInt((start_ts - batchKey) << 10);
+            Bytes.setInt(batch.start_col, (start_ts - batchKey) << 10, 0);
           }
           if (stop_ts < (batchKey + MAX_TIMESPAN)) {
             Bytes.setInt(batch.end_col, (stop_ts - batchKey) << 10, 0);
+            int end_col = ((stop_ts - batchKey) << 10) | (0xFFFF0000 >>> 22);
+            batch.end_col = Bytes.fromInt(end_col);
           }
         }
         batch.add(fake_key);
@@ -952,8 +954,8 @@ public final class Scanner implements Runnable {
 
   private class KeyBatch {
     ArrayList<ArrayList<byte[]>> keyLists = new ArrayList<ArrayList<byte[]>>();
-    public byte[] start_col = { 0 };
-    public byte[] end_col = Bytes.fromLong(-1); // 0xFFFFFFFFFFFFFFFF
+    public byte[] start_col = Bytes.fromInt(0);
+    public byte[] end_col = Bytes.fromInt(-1); // 0xFFFFFFFF
 
     private ArrayList<byte[]> list;
     public void add(byte[] key) {
@@ -1040,7 +1042,7 @@ public final class Scanner implements Runnable {
       ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
       // if (colIterator != null) {
       final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
-      // LOG.debug("Column names " + cur_row.getColumns().getColumnNames());
+      // LOG.warn("Column names " + cur_row.getColumns().getColumnNames());
       // colIterator = cur_row.getColumns().iterator();
       // }
       byte[] last_key = EMPTY_ARRAY;
@@ -1054,6 +1056,7 @@ public final class Scanner implements Runnable {
           kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
         }
         last_key = new_key;
+        LOG.warn("" + Bytes.pretty(column.getName()));
 
         final KeyValue kv = new KeyValue(new_key, families[0],
             column.getName(), column.getTimestamp() / 1000, // micro to ms
