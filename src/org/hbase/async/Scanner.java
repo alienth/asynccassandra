@@ -1014,6 +1014,7 @@ public final class Scanner implements Runnable {
               .getKeySlice(slice_iterator.next())
               .withColumnRange(current_batch.start_col, current_batch.end_col, false, Integer.MAX_VALUE)
               .execute();
+        
         iterator = results.getResult().iterator();
       } catch (ConnectionException e) {
         deferred.callback(e);
@@ -1056,7 +1057,6 @@ public final class Scanner implements Runnable {
           kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
         }
         last_key = new_key;
-        LOG.warn("" + Bytes.pretty(column.getName()));
 
         final KeyValue kv = new KeyValue(new_key, families[0],
             column.getName(), column.getTimestamp() / 1000, // micro to ms
