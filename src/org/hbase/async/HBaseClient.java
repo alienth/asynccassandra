@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Deferred;
 
+import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
 
@@ -68,13 +69,29 @@ public class HBaseClient {
   static short SALT_WIDTH = 0;
 
   public Deferred<Object> lpush(final PutRequest request) {
-    jedisPool.getResource().lpush(request.key(), request.value());
-    jedisPool.getResource().ltrim(request.key(), 0, 60 * 60 * 3);
+    Jedis jedis = null;
+    try {
+      jedis = jedisPool.getResource();
+      jedis.lpush(request.key(), request.value());
+      jedis.ltrim(request.key(), 0, 60 * 60 * 3);
+    } finally {
+      if (jedis != null) {
+        jedis.close();
+      }
+    }
     return Deferred.fromResult(null);
   }
 
   public Deferred<Object> hsetnx(final PutRequest request) {
-    jedisPool.getResource().hsetnx(request.key(), request.value(), ZERO_ARRAY);
+    Jedis jedis = null;
+    try {
+      jedis = jedisPool.getResource();
+      jedis.hsetnx(request.key(), request.value(), ZERO_ARRAY);
+    } finally {
+      if (jedis != null) {
+        jedis.close();
+      }
+    }
     return Deferred.fromResult(null);
   }
 

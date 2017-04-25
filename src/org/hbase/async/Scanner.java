@@ -41,6 +41,8 @@ import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Deferred;
 
+import redis.clients.jedis.Jedis;
+
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
 /**
@@ -694,7 +696,17 @@ public final class Scanner implements Runnable {
     }
     final byte[] key = iterator.next();
     final byte[] tags = Arrays.copyOfRange(key, metric.length + 1, key.length);
-    List<byte[]> results = client.jedisPool.getResource().lrange(key, 0, 60 * 60 * 3);
+    Jedis jedis = null;
+    List<byte[]> results = null;
+    try {
+      jedis = client.jedisPool.getResource();
+      results = jedis.lrange(key, 0, 60 * 60 * 3);
+    } catch (Exception e) {
+      deferred.callback(e);
+    } finally {
+      jedis.close();
+    }
+
 
     final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
 
@@ -742,11 +754,17 @@ public final class Scanner implements Runnable {
     keys = new ArrayList<byte[]>();
 
     Set<byte[]> rows = new HashSet<byte[]>();
+    Jedis jedis = null;
     try {
-      rows = client.jedisPool.getResource().hkeys(metric);
+      jedis = client.jedisPool.getResource();
+      rows = jedis.hkeys(metric);
     } catch (Exception e) {
       deferred.callback(e);
       return;
+    } finally {
+      if (jedis != null) {
+        jedis.close();
+      }
     }
     
     int keyCount = 0;
