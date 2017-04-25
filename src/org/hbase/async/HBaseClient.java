@@ -69,15 +69,9 @@ public class HBaseClient {
   static short SALT_WIDTH = 0;
 
   public Deferred<Object> lpush(final PutRequest request) {
-    Jedis jedis = null;
-    try {
-      jedis = jedisPool.getResource();
+    try (Jedis jedis = jedisPool.getResource()) {
       jedis.lpush(request.key(), request.value());
       jedis.ltrim(request.key(), 0, 60 * 60 * 3);
-    } finally {
-      if (jedis != null) {
-        jedis.close();
-      }
     }
     return Deferred.fromResult(null);
   }

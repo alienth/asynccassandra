@@ -177,7 +177,10 @@ public final class Scanner implements Runnable {
    */
   Scanner(final HBaseClient client) {
     this.client = client;
+    this.jedis = client.jedisPool.getResource();
   }
+
+  Jedis jedis;
 
   /**
    * Returns the row key this scanner is currently at.
@@ -681,38 +684,32 @@ public final class Scanner implements Runnable {
   @Override
   public void run() {
 
+    try {
     if (keys == null) {
       buildKeys();
       if (keys.size() == 0) {
         // No matching rows, apparently
         deferred.callback(null);
+        jedis.close();
         return;
       }
       iterator = keys.iterator();
     }
     if (!iterator.hasNext()) {
       deferred.callback(null);
+      jedis.close();
       return;
     }
     final byte[] key = iterator.next();
     final byte[] tags = Arrays.copyOfRange(key, metric.length + 1, key.length);
-    Jedis jedis = null;
     List<byte[]> results = null;
-    try {
-      jedis = client.jedisPool.getResource();
-      results = jedis.lrange(key, 0, 60 * 60 * 3);
-    } catch (Exception e) {
-      deferred.callback(e);
-    } finally {
-      jedis.close();
-    }
+    results = jedis.lrange(key, 0, 60 * 60 * 3);
 
 
     final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
 
     if (results.size() == 0) {
       deferred.callback(rows);
-      // return Deferred.fromResult(null);
       return;
     }
 
@@ -742,6 +739,10 @@ public final class Scanner implements Runnable {
       rows.add(kvs);
     }
     deferred.callback(rows);
+    } catch (Exception e) {
+      jedis.close();
+      deferred.callback(e);
+    }
   }
 
   private byte[] metric;
@@ -753,19 +754,8 @@ public final class Scanner implements Runnable {
   private void buildKeys() {
     keys = new ArrayList<byte[]>();
 
-    Set<byte[]> rows = new HashSet<byte[]>();
-    Jedis jedis = null;
-    try {
-      jedis = client.jedisPool.getResource();
-      rows = jedis.hkeys(metric);
-    } catch (Exception e) {
-      deferred.callback(e);
-      return;
-    } finally {
-      if (jedis != null) {
-        jedis.close();
-      }
-    }
+    jedis = client.jedisPool.getResource();
+    Set<byte[]> rows = jedis.hkeys(metric);
     
     int keyCount = 0;
     for (byte[] row : rows) {
