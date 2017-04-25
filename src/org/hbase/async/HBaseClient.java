@@ -100,13 +100,9 @@ public class HBaseClient {
     return Collections.emptyList();
   }
   
-  public Scanner newScanner(final byte[] table) {
+  public Scanner newScanner(final Object table) {
     num_scanners_opened.incrementAndGet();
-    return new Scanner(this, executor, table, getContext(table));
-  }
-  
-  public Scanner newScanner(final String table) {
-    return newScanner(table.getBytes());
+    return new Scanner(this);
   }
   
   public Deferred<Object> shutdown() {

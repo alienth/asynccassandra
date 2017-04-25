@@ -29,15 +29,16 @@ package org.hbase.async;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Deferred;
-
-import redis.clients.jedis.Jedis;
 
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
@@ -100,7 +101,9 @@ public final class Scanner implements Runnable {
    */
   public static final int DEFAULT_MAX_NUM_ROWS = 512;
   
-  private final Jedis client;
+  private final HBaseClient client;
+
+  final ExecutorService executor = Executors.newFixedThreadPool(25);
   
   /**
    * The key to start scanning from.  An empty array means "start from the
@@ -169,9 +172,8 @@ public final class Scanner implements Runnable {
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
    */
-  Scanner(final Jedis client) {
+  Scanner(final HBaseClient client) {
     this.client = client;
-
   }
 
   /**
@@ -651,79 +653,12 @@ public final class Scanner implements Runnable {
     return Deferred.fromResult(null);
   }
 
-  public String toString() {
-//    final String region = this.region == null ? "null"
-//      : this.region == DONE ? "none" : this.region.toString();
-    final String filter = this.filter == null ? "null"
-      : this.filter.toString();
-    int fam_length = 0;
-    if (families == null) {
-      fam_length = 4;
-    } else {
-      for (byte[] family : families) {
-        fam_length += family.length + 2 + 2;
-      }
-    }
-    int qual_length = 0;
-    if (qualifiers == null) {
-      qual_length = 4;
-    } else {
-      for (byte[][] qualifier : qualifiers) {
-        if (qualifier != null) {
-          for (byte[] qual : qualifier) {
-            qual_length += qual.length + 2 + 1;
-          }
-        }
-      }
-    }
-    final StringBuilder buf = new StringBuilder(14 + 1 + table.length + 1 + 12
-      + 1 + start_key.length + 1 + 11 + 1 + stop_key.length + 1
-      + 11 + 1 + fam_length + qual_length + 1
-      + 23 + 5 + 15 + 5 + 14 + 6
-      //+ 9 + 1 + region.length() + 1
-      + 9 + 1 + filter.length() + 1
-      + 13 + 18 + 1);
-    buf.append("Scanner(table=");
-    Bytes.pretty(buf, table);
-    buf.append(", start_key=");
-    Bytes.pretty(buf, start_key);
-    buf.append(", stop_key=");
-    Bytes.pretty(buf, stop_key);
-    buf.append(", columns={");
-    familiesToString(buf);
-    buf.append("}, populate_blockcache=").append(populate_blockcache)
-      .append(", max_num_rows=").append(max_num_rows)
-      .append(", max_num_kvs=").append(max_num_kvs)
-      //.append(", region=").append(region)
-      .append(", filter=").append(filter);
-    buf.append(", scanner_id=").append(Bytes.hex(scanner_id))
-      .append(')');
-    return buf.toString();
-  }
 
-  /** Helper method for {@link toString}.  */
-  private void familiesToString(final StringBuilder buf) {
-    if (families == null) {
-      return;
-    }
-    for (int i = 0; i < families.length; i++) {
-      Bytes.pretty(buf, families[i]);
-      if (qualifiers != null && qualifiers[i] != null) {
-        buf.append(':');
-        Bytes.pretty(buf, qualifiers[i]);
-      }
-      buf.append(", ");
-    }
-    buf.setLength(buf.length() - 2);  // Remove the extra ", ".
-  }
+
 
   // ---------------------- //
   // Package private stuff. //
   // ---------------------- //
-
-  byte[] table() {
-    return table;
-  }
 
   byte[] startKey() {
     return start_key;
@@ -865,31 +800,30 @@ public final class Scanner implements Runnable {
   private void buildKeys() {
     batches = new HashMap<Integer, KeyBatch>();
 
-    Rows<byte[], byte[]> rows;
+    Set<byte[]> rows = new HashSet<byte[]>();
     try {
-      // TODO Maybe preserve the column range lookup here so we ignore month-long keys that have no data inside our requested range?
-      rows = keyspace.prepareQuery(HBaseClient.TSDB_T_INDEX).getKeySlice(indexKeys)
-        .execute().getResult();
-    } catch (ConnectionException e) {
+      rows = client.jedis.hkeys(metric);
+    } catch (Exception e) {
       deferred.callback(e);
       return;
     }
+    
     int keyCount = 0;
-    for (Row<byte[], byte[]> row : rows) {
-      final int key_width = row.getKey().length;
-      for (Column<byte[]> column : row.getColumns()) {
-        byte[] fake_key = new byte[column.getName().length + key_width];
-        System.arraycopy(column.getName(), 0, fake_key, key_width, fake_key.length - key_width);
-        if (filter != null) {
-          final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
-          if (!regex.matches(fake_key)) {
-            continue;
-          }
+    for (byte[] row : rows) {
+      byte[] fake_key = new byte[metric.length + 1 + 4 + row.length]; // timestamp + delim
+      System.arraycopy(row, 0, fake_key, metric.length + 1 + 4, fake_key.length - metric.length - 1 - 4);
+      if (filter != null) {
+        final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
+        if (!regex.matches(fake_key)) {
+          continue;
         }
-        System.arraycopy(row.getKey(), 0, fake_key, 0, row.getKey().length);
+      }
+      byte[] key = new byte[metric.length + 1 + row.length];
+      KeyBatch batch = batches.get(batchKey);
+      batch.ad
+      System.arraycopy(row.getKey(), 0, fake_key, 0, row.getKey().length);
 
         int batchKey = Bytes.getInt(row.getKey(), metric.length + 1);
-        KeyBatch batch = batches.get(batchKey);
         if (batch == null) {
           batch = new KeyBatch();
           batches.put(batchKey, batch);
