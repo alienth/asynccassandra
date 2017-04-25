@@ -35,13 +35,9 @@ import java.util.concurrent.ExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.netflix.astyanax.Keyspace;
-import com.netflix.astyanax.connectionpool.OperationResult;
-import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
-import com.netflix.astyanax.model.Column;
-import com.netflix.astyanax.model.Row;
-import com.netflix.astyanax.model.Rows;
 import com.stumbleupon.async.Deferred;
+
+import redis.clients.jedis.Jedis;
 
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
@@ -104,13 +100,7 @@ public final class Scanner implements Runnable {
    */
   public static final int DEFAULT_MAX_NUM_ROWS = 512;
   
-  private final HBaseClient client;
-  private final byte[] table;
-  private final ExecutorService executor; // do the dew
-  private final Keyspace keyspace;
-  
-  private Iterator<Row<byte[], byte[]>> iterator;
-  private Iterator<Column<byte[]>> colIterator;
+  private final Jedis client;
   
   /**
    * The key to start scanning from.  An empty array means "start from the
@@ -130,10 +120,6 @@ public final class Scanner implements Runnable {
    */
   private byte[] stop_key = EMPTY_ARRAY;
 
-  private byte[] start_col;
-  private byte[] stop_col;
-
-  private byte[][] families;
   private byte[][][] qualifiers;
 
   /** Filter to apply on the scanner.  */
@@ -144,9 +130,6 @@ public final class Scanner implements Runnable {
 
   /** Maximum {@link KeyValue} timestamp to scan.  */
   private long max_timestamp = Long.MAX_VALUE;
-
-  /** @see #setServerBlockCache  */
-  private boolean populate_blockcache = true;
 
   /**
    * Maximum number of rows to fetch at a time.
@@ -185,14 +168,9 @@ public final class Scanner implements Runnable {
   /**
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
-   * @param table The non-empty name of the table to use.
    */
-  Scanner(final HBaseClient client, final ExecutorService executor, final byte[] table, final Keyspace keyspace) {
+  Scanner(final Jedis client) {
     this.client = client;
-    KeyValue.checkTable(table);
-    this.executor = executor;
-    this.table = table;
-    this.keyspace = keyspace;
 
   }
 
@@ -203,25 +181,6 @@ public final class Scanner implements Runnable {
    */
   public byte[] getCurrentKey() {
     return start_key;
-  }
-
-  /**
-   * Specifies from which col to start scanning (inclusive).
-   * @param start_col The column key to start scanning from.  If you don't invoke
-   * this method, scanning will begin from the first column for the given key.
-   * <strong>This byte array will NOT be copied.</strong>
-   * @throws IllegalStateException if scanning already started.
-   */
-  public void setStartCol(final byte[] start_col) {
-    KeyValue.checkKey(start_col);
-    checkScanningNotStarted();
-    this.start_col = start_col;
-  }
-
-  public void setStopCol(final byte[] stop_col) {
-    KeyValue.checkKey(stop_col);
-    checkScanningNotStarted();
-    this.stop_col = stop_col;
   }
 
   public void addKey(final byte[] key) {
@@ -300,68 +259,6 @@ public final class Scanner implements Runnable {
    */
   public void setStopKey(final String stop_key) {
     setStopKey(stop_key.getBytes());
-  }
-
-  /**
-   * Specifies a particular column family to scan.
-   * @param family The column family.
-   * <strong>This byte array will NOT be copied.</strong>
-   * @throws IllegalStateException if scanning already started.
-   */
-  public void setFamily(final byte[] family) {
-    KeyValue.checkFamily(family);
-    checkScanningNotStarted();
-    families = new byte[][] { family };
-  }
-
-  /**
-   * Specifies a particular column family to scan.
-   * @param family The column family.
-   */
-  public void setFamily(final String family) {
-    setFamily(family.getBytes());
-  }
-
-  /**
-   * Specifies multiple column families to scan.
-   * <p>
-   * If {@code qualifiers} is not {@code null}, then {@code qualifiers[i]}
-   * is assumed to be the list of qualifiers to scan in the family
-   * {@code families[i]}.  If {@code qualifiers[i]} is {@code null}, then
-   * all the columns in the family {@code families[i]} will be scanned.
-   * @param families Array of column families names.
-   * @param qualifiers Array of column qualifiers.  Can be {@code null}.
-   * <strong>This array of byte arrays will NOT be copied.</strong>
-   * @throws IllegalStateException if scanning already started.
-   * @since 1.5
-   */
-  public void setFamilies(byte[][] families, byte[][][] qualifiers) {
-    checkScanningNotStarted();
-    for (int i = 0; i < families.length; i++) {
-      KeyValue.checkFamily(families[i]);
-      if (qualifiers != null && qualifiers[i] != null) {
-        for (byte[] qualifier : qualifiers[i]) {
-          KeyValue.checkQualifier(qualifier);
-        }
-      }
-    }
-    this.families = families;
-    this.qualifiers = qualifiers;
-  }
-
-  /**
-   * Specifies multiple column families to scan.
-   * @param families The column families to scan.
-   * @since 1.5
-   */
-  public void setFamilies(final String... families) {
-    checkScanningNotStarted();
-    this.families = new byte[families.length][];
-    for (int i = 0; i < families.length; i++) {
-      this.families[i] = families[i].getBytes();
-      KeyValue.checkFamily(this.families[i]);
-      qualifiers[i] = null;
-    }
   }
 
   /**
@@ -459,25 +356,6 @@ public final class Scanner implements Runnable {
    */
   public void setKeyRegexp(final String regexp, final Charset charset) {
     filter = new KeyRegexpFilter(regexp, charset);
-  }
-
-  /**
-   * Sets whether or not the server should populate its block cache.
-   * @param populate_blockcache if {@code false}, the block cache of the server
-   * will not be populated as the rows are being scanned.  If {@code true} (the
-   * default), the blocks loaded by the server in order to feed the scanner
-   * <em>may</em> be added to the block cache, which will make subsequent read
-   * accesses to the same rows and other neighbouring rows faster.  Whether or
-   * not blocks will be added to the cache depend on the table's configuration.
-   * <p>
-   * If you scan a sequence of keys that is unlikely to be accessed again in
-   * the near future, you can help the server improve its cache efficiency by
-   * setting this to {@code false}.
-   * @throws IllegalStateException if scanning already started.
-   */
-  public void setServerBlockCache(final boolean populate_blockcache) {
-    checkScanningNotStarted();
-    this.populate_blockcache = populate_blockcache;
   }
 
   /**
@@ -875,23 +753,104 @@ public final class Scanner implements Runnable {
 
   @Override
   public void run() {
-    if (families == null || families.length < 1) {
-      deferred.callback(new UnsupportedOperationException(
-          "Can't scan cassandra without a column family: " + this));
+
+    if (batches == null) {
+      buildKeys();
+      if (batches.size() == 0) {
+        // No matching rows, apparently
+        deferred.callback(null);
+        return;
+      }
+      batch_iterator = batches.values().iterator();
+      current_batch = batch_iterator.next();
+      slice_iterator = current_batch.keyLists.iterator();
+    }
+    if (iterator == null) {
+
+      if (!slice_iterator.hasNext()) {
+        if (batch_iterator.hasNext()) {
+          current_batch = batch_iterator.next();
+          slice_iterator = current_batch.keyLists.iterator();
+        } else {
+          deferred.callback(null);
+          return;
+        }
+
+      }
+
+      try {
+        // LOG.warn("Starting row query. Start: " +
+        // Bytes.pretty(start_key) + " Stop: " +
+        // Bytes.pretty(stop_key));
+        final OperationResult<Rows<byte[], byte[]>> results = keyspace
+            .prepareQuery(client.getColumnFamilySchemas().get(families[0]))
+            // .getKeySlice(keys.subList(keyIndex,
+            // Math.min(keys.size(), keyIndex + max_num_rows) ))
+            .getKeySlice(slice_iterator.next())
+            .withColumnRange(current_batch.start_col, current_batch.end_col, false, Integer.MAX_VALUE)
+            .execute();
+
+        iterator = results.getResult().iterator();
+      } catch (ConnectionException e) {
+        deferred.callback(e);
+        return;
+      }
+    }
+
+    // Dead code?
+    if (!iterator.hasNext()) {
+      deferred.callback(null);
+      // return Deferred.fromResult(null);
       return;
     }
-    // TODO: It's wasteful to compare this on each iteration.
-    if (Bytes.memcmp(families[0], "id".getBytes()) == 0 || Bytes.memcmp(families[0], "name".getBytes()) == 0) {
-      scanID();
-      return;
-    } else if (Bytes.memcmp(families[0], "t".getBytes()) == 0) {
-      scanDatapoints();
-      return;
-    } else {
-      deferred.callback(new UnsupportedOperationException(
-          "Unsupported column family scanned: " + this));
-      return;
+
+    // TODO - Use less memory here by not duplicating the row key
+    // constantly.
+    // Put all datapoints with the same key in a single row.
+    final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
+
+    int kv_count = 0;
+
+    while (kv_count <= max_num_kvs && iterator.hasNext()) {
+      final Row<byte[], byte[]> cur_row = iterator.next();
+      // LOG.debug("Looking at key " + Bytes.pretty(cur_row.getKey()));
+
+      ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
+      // if (colIterator != null) {
+      final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
+      // LOG.warn("Column names " +
+      // cur_row.getColumns().getColumnNames());
+      // colIterator = cur_row.getColumns().iterator();
+      // }
+      byte[] last_key = EMPTY_ARRAY;
+      while (colIterator.hasNext()) {
+        final Column<byte[]> column = colIterator.next();
+
+        final byte[] new_key = cur_row.getKey();
+        if (kvs.size() > 0 && Bytes.memcmp(last_key, new_key) != 0) {
+          rows.add(kvs);
+          kv_count += kvs.size();
+          kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
+        }
+        last_key = new_key;
+
+        final KeyValue kv = new KeyValue(new_key, families[0], column.getName(), column.getTimestamp() / 1000, // micro
+                                                            // to
+                                                            // ms
+            column.getByteArrayValue());
+        kvs.add(kv);
+      }
+      if (kvs.size() > 0) {
+        rows.add(kvs);
+        kv_count += kvs.size();
+      }
     }
+
+    if (!iterator.hasNext()) {
+      iterator = null;
+    }
+
+    deferred.callback(rows);
   }
 
   private byte[] metric;
@@ -975,146 +934,5 @@ public final class Scanner implements Runnable {
   private Iterator<ArrayList<byte[]>> slice_iterator;
   private KeyBatch current_batch;
 
-  // I have a batch of keys, of which I need to iterate over.
-  // For each batch, I need to generate sublists.
-  // For each sublist, I need to execute a query to build an iterator.
-  // When an iterator runs out, I need to get the next sublist.
-  // When we run out of sublists, I need to get the next batch.
-  // When we run out of batches, we need to return null.
-  public void scanDatapoints() {
-    if (batches == null) {
-      buildKeys();
-      if (batches.size() == 0) {
-        // No matching rows, apparently
-        deferred.callback(null);
-        return;
-      }
-      batch_iterator = batches.values().iterator();
-      current_batch = batch_iterator.next();
-      slice_iterator = current_batch.keyLists.iterator();
-    }
-    if (iterator == null) {
-
-      if (!slice_iterator.hasNext()) {
-        if (batch_iterator.hasNext()) {
-          current_batch = batch_iterator.next();
-          slice_iterator = current_batch.keyLists.iterator();
-        } else {
-          deferred.callback(null);
-          return;
-        }
-
-      }
-
-      try {
-        // LOG.warn("Starting row query. Start: " + Bytes.pretty(start_key) + " Stop: " + Bytes.pretty(stop_key));
-        final OperationResult<Rows<byte[], byte[]>> results =
-            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-              // .getKeySlice(keys.subList(keyIndex, Math.min(keys.size(), keyIndex + max_num_rows) ))
-              .getKeySlice(slice_iterator.next())
-              .withColumnRange(current_batch.start_col, current_batch.end_col, false, Integer.MAX_VALUE)
-              .execute();
-        
-        iterator = results.getResult().iterator();
-      } catch (ConnectionException e) {
-        deferred.callback(e);
-        return;
-      }
-    }
-
-    // Dead code?
-    if (!iterator.hasNext()) {
-      deferred.callback(null);
-      //return Deferred.fromResult(null);
-      return;
-    }
-
-    // TODO - Use less memory here by not duplicating the row key constantly.
-    // Put all datapoints with the same key in a single row.
-    final ArrayList<ArrayList<KeyValue>> rows =
-        new ArrayList<ArrayList<KeyValue>>();
-
-    int kv_count = 0;
-
-    while (kv_count <= max_num_kvs && iterator.hasNext()) {
-      final Row<byte[], byte[]> cur_row = iterator.next();
-      // LOG.debug("Looking at key " + Bytes.pretty(cur_row.getKey()));
-
-      ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
-      // if (colIterator != null) {
-      final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
-      // LOG.warn("Column names " + cur_row.getColumns().getColumnNames());
-      // colIterator = cur_row.getColumns().iterator();
-      // }
-      byte[] last_key = EMPTY_ARRAY;
-      while (colIterator.hasNext()) {
-        final Column<byte[]> column = colIterator.next();
-
-        final byte[] new_key = cur_row.getKey();
-        if (kvs.size() > 0 && Bytes.memcmp(last_key, new_key) != 0) {
-          rows.add(kvs);
-          kv_count += kvs.size();
-          kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
-        }
-        last_key = new_key;
-
-        final KeyValue kv = new KeyValue(new_key, families[0],
-            column.getName(), column.getTimestamp() / 1000, // micro to ms
-            column.getByteArrayValue());
-        kvs.add(kv);
-      }
-      if (kvs.size() > 0) {
-        rows.add(kvs);
-        kv_count += kvs.size();
-      }
-    }
-
-    if (!iterator.hasNext()) {
-      iterator = null;
-    }
-
-    deferred.callback(rows);
-  }
-
-  private void scanID() {
-    if (iterator == null) {
-      try {
-        final OperationResult<Rows<byte[], byte[]>> results =
-            keyspace.prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-          .getKeySlice(keys)
-          .withColumnRange(start_col, stop_col, false, Integer.MAX_VALUE).execute();
-        iterator = results.getResult().iterator();
-      } catch (ConnectionException e) {
-        deferred.callback(e);
-        return;
-      }
-    }
-
-    if (!iterator.hasNext()) {
-      deferred.callback(null);
-      //return Deferred.fromResult(null);
-      return;
-    }
-
-    // dunno how to size this since we don't have the low level deets
-    final ArrayList<ArrayList<KeyValue>> rows =
-        new ArrayList<ArrayList<KeyValue>>();
-
-    int kv_count = 0;
-    while (iterator.hasNext()) {
-      final Row<byte[], byte[]> result = iterator.next();
-
-      final ArrayList<KeyValue> row = new ArrayList<KeyValue>(result.getColumns().size());
-      for (final Column<byte[]> column : result.getColumns()) {
-        final KeyValue kv = new KeyValue(result.getKey(), families[0],
-            column.getName(), column.getTimestamp() / 1000, // micro to ms
-            column.getByteArrayValue());
-        row.add(kv);
-      }
-      rows.add(row);
-      kv_count += row.size();
-    }
-    deferred.callback(rows);
-  }
 
 }

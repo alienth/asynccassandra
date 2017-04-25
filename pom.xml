@@ -3,20 +3,20 @@
     <modelVersion>4.0.0</modelVersion>
     
     <groupId>net.opentsdb</groupId>
-    <artifactId>asynccassandra</artifactId>
+    <artifactId>asyncredis</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>Asynchronous Cassandra Client</name>
+    <name>Asynchronous Redis Client</name>
     
     <organization>
-        <name>The Async Cassandra Authors</name>
-        <url>http://opentsdb.net</url>
+        <name>None</name>
+        <url>http://localhost</url>
     </organization>
     
     <description>
-        An alternative client for connecting OpenTSDB to Cassandra via the AsyncHBase API
+        An alternative client for connecting OpenTSDB to redis via the AsyncHBase API
     </description>
     
-    <url>https://github.com/OpenTSDB/asynccassandra</url>
+    <url>https://github.com/alienth/asyncredis</url>
     <licenses>
         <license>
             <name>BSD</name>
@@ -26,48 +26,16 @@
     </licenses>
     
     <scm>
-        <connection>scm:git:git@github.com:OpenTSDB/asynccassandra.git</connection>
-        <url>https://github.com/OpenTSDB/asynccassandra</url>
+        <connection>scm:git:git@github.com:alienth/asyncredis.git</connection>
+        <url>https://github.com/alienth/asyncredis</url>
     </scm>
     
     <issueManagement>
         <system>GitHub</system>
-        <url>https://github.com/OpenTSDB/asynccassandra/issues</url>
+        <url>https://github.com/alienth/asyncredis/issues</url>
     </issueManagement>
     
-    <mailingLists>
-        <mailingList>
-            <name>User List</name>
-            <post>asynchbase@googlegroups.com</post>
-            <subscribe>asynchbase+subscribe@googlegroups.com</subscribe>
-            <unsubscribe>asynchbase+unsubscribe@googlegroups.com</unsubscribe>
-            <archive>https://groups.google.com/group/asynchbase</archive>
-        </mailingList>
-    </mailingLists>
-    
-    <developers>
-      <developer>
-        <id>tsuna</id>
-        <name>Benoit "tsuna" Sigoure</name>
-        <email>tsunanet@gmail.com</email>
-        <roles>
-          <role>developer</role>
-        </roles>
-        <timezone>-8</timezone>
-      </developer>
-      
-      <developer>
-        <id>manolama</id>
-        <name>Chris Larsen</name>
-        <email>clarsen@yahoo-inc.com</email>
-        <roles>
-          <role>developer</role>
-        </roles>
-        <timezone>-8</timezone>
-      </developer>
-    </developers>
-    
-    <inceptionYear>2015</inceptionYear>
+    <inceptionYear>2017</inceptionYear>
     
     <distributionManagement>
       <snapshotRepository>
@@ -196,42 +164,14 @@
             <artifactId>protobuf-java</artifactId>
             <version>2.5.0</version>
         </dependency>
-        
-        <dependency>
-            <groupId>com.netflix.astyanax</groupId>
-            <artifactId>astyanax</artifactId>
-            <version>3.9.0</version>
-        </dependency>
-        
-        <dependency>
-            <groupId>com.netflix.astyanax</groupId>
-            <artifactId>astyanax-core</artifactId>
-            <version>3.9.0</version>
-        </dependency>
-        
-        <dependency>
-            <groupId>com.netflix.astyanax</groupId>
-            <artifactId>astyanax-cassandra</artifactId>
-            <version>3.9.0</version>
-        </dependency>
-        
-        <dependency>
-            <groupId>com.netflix.astyanax</groupId>
-            <artifactId>astyanax-thrift</artifactId>
-            <version>3.9.0</version>
-        </dependency>
-        
-        <dependency>
-            <groupId>com.netflix.astyanax</groupId>
-            <artifactId>astyanax-recipes</artifactId>
-            <version>3.9.0</version>
-        </dependency>
-        
-        <dependency>
-            <groupId>org.apache.cassandra</groupId>
-            <artifactId>cassandra-thrift</artifactId>
-            <version>2.1.10</version>
-        </dependency>
+
+	<dependency>
+	    <groupId>redis.clients</groupId>
+	    <artifactId>jedis</artifactId>
+	    <version>2.9.0</version>
+	    <type>jar</type>
+	    <scope>compile</scope>
+	</dependency>
         
         <!-- runtime dependencies -->
         <dependency>
