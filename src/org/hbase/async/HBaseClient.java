@@ -1,34 +1,16 @@
 package org.hbase.async;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.hbase.async.Bytes.ByteMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.stumbleupon.async.Callback;
 import com.stumbleupon.async.Deferred;
 
-import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 
 public class HBaseClient {
   private static final Logger LOG = LoggerFactory.getLogger(HBaseClient.class);
@@ -38,7 +20,7 @@ public class HBaseClient {
   /** A byte array containing a single zero byte.  */
   static final byte[] ZERO_ARRAY = new byte[] { 0 };
   
-  final Jedis jedis;
+  final JedisPool jedisPool;
   final Config config;
 
   //------------------------ //
@@ -76,7 +58,7 @@ public class HBaseClient {
       throw new IllegalArgumentException(
           "Missing required config 'redis.server'");
     }
-    jedis = new Jedis(config.getString("redis.server"));
+    jedisPool = new JedisPool(new JedisPoolConfig(), config.getString("redis.server"));
   }
   
   static short METRICS_WIDTH = 3;
@@ -86,13 +68,13 @@ public class HBaseClient {
   static short SALT_WIDTH = 0;
 
   public Deferred<Object> lpush(final PutRequest request) {
-    jedis.lpush(request.key(), request.value());
-    jedis.ltrim(request.key(), 0, 60 * 60 * 3);
+    jedisPool.getResource().lpush(request.key(), request.value());
+    jedisPool.getResource().ltrim(request.key(), 0, 60 * 60 * 3);
     return Deferred.fromResult(null);
   }
 
   public Deferred<Object> hsetnx(final PutRequest request) {
-    jedis.hsetnx(request.key(), request.value(), ZERO_ARRAY);
+    jedisPool.getResource().hsetnx(request.key(), request.value(), ZERO_ARRAY);
     return Deferred.fromResult(null);
   }
 
@@ -112,7 +94,7 @@ public class HBaseClient {
   
   public Deferred<Object> shutdown() {
     try {
-      jedis.close();
+      jedisPool.destroy();
     } catch (Exception e) {
       LOG.error("failed to close connection to redis", e);
     }

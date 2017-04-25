@@ -29,14 +29,12 @@ package org.hbase.async;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.zip.DataFormatException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -696,7 +694,7 @@ public final class Scanner implements Runnable {
     }
     final byte[] key = iterator.next();
     final byte[] tags = Arrays.copyOfRange(key, metric.length + 1, key.length);
-    List<byte[]> results = client.jedis.lrange(key, 0, 60 * 60 * 3);
+    List<byte[]> results = client.jedisPool.getResource().lrange(key, 0, 60 * 60 * 3);
 
     final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
 
@@ -745,7 +743,7 @@ public final class Scanner implements Runnable {
 
     Set<byte[]> rows = new HashSet<byte[]>();
     try {
-      rows = client.jedis.hkeys(metric);
+      rows = client.jedisPool.getResource().hkeys(metric);
     } catch (Exception e) {
       deferred.callback(e);
       return;
