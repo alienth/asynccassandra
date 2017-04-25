@@ -236,11 +236,6 @@ public final class Scanner implements Runnable {
     this.stop_key = stop_key;
   }
 
-  public void setIndexKeys(final ArrayList<byte[]> keys) {
-    checkScanningNotStarted();
-    this.indexKeys = keys;
-  }
-
   public void setMetric(byte[] metric) {
     checkScanningNotStarted();
     this.metric = metric;
@@ -703,6 +698,10 @@ public final class Scanner implements Runnable {
       }
       iterator = keys.iterator();
     }
+    if (!iterator.hasNext()) {
+      deferred.callback(null);
+      return;
+    }
     final byte[] key = iterator.next();
     final byte[] tags = Arrays.copyOfRange(key, metric.length + 1, key.length);
     List<byte[]> results = client.jedis.lrange(key, 0, 60 * 60 * 3);
@@ -718,6 +717,7 @@ public final class Scanner implements Runnable {
     final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(results.size());
     for (byte[] value : results) {
         int ts = Bytes.getInt(value, 0);
+        short flags = Bytes.getShort(value, 4);
         int offset = (ts % MAX_TIMESPAN);
         int base_time = ts - offset;
 
@@ -727,17 +727,11 @@ public final class Scanner implements Runnable {
         System.arraycopy(tags, 0, new_key, metric.length + 5, tags.length);
 
         offset = offset << 10;
-        if (value.length == 6) { // int
-          offset |= 
+        offset |= flags;
 
-        } else if (value.length == 8) { // float
+        byte[] new_qual = Bytes.fromInt(offset);
 
-        } else {
-          // throw new DataFormatException("Invalid value length for " + metric + " at " + ts);
-        }
-        byte[] new_qual = Bytes.fromInt(ts);
-
-        byte[] new_value = Arrays.copyOfRange(value, 3, value.length);
+        byte[] new_value = Arrays.copyOfRange(value, 6, value.length);
 
         final KeyValue kv = new KeyValue(new_key, null, new_qual, (long) ts, new_value);
         kvs.add(kv);
