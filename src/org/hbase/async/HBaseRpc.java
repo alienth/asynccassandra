@@ -474,7 +474,6 @@ public abstract class HBaseRpc {
    * @param row The name of the row this RPC is for.
    */
   HBaseRpc(final byte[] table, final byte[] key) {
-    KeyValue.checkTable(table);
     KeyValue.checkKey(key);
     this.table = table;
     this.key = key;

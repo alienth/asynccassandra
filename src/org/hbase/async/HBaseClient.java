@@ -85,9 +85,14 @@ public class HBaseClient {
   static final short TIMESTAMP_BYTES = 4;
   static short SALT_WIDTH = 0;
 
-  public Deferred<Object> put(final PutRequest request) {
-    jedis.lpushx(request.key(), request.value());
+  public Deferred<Object> lpush(final PutRequest request) {
+    jedis.lpush(request.key(), request.value());
     jedis.ltrim(request.key(), 0, 60 * 60 * 3);
+    return Deferred.fromResult(null);
+  }
+
+  public Deferred<Object> hsetnx(final PutRequest request) {
+    jedis.hsetnx(request.key(), request.value(), ZERO_ARRAY);
     return Deferred.fromResult(null);
   }
 

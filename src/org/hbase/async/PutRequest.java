@@ -401,16 +401,11 @@ public final class PutRequest extends BatchableRpc
                      final long timestamp,
                      final long lockid) {
     super(table, key, family, timestamp, lockid);
-    KeyValue.checkFamily(family);
     if (qualifiers.length != values.length) {
       throw new IllegalArgumentException("Have " + qualifiers.length
         + " qualifiers and " + values.length + " values.  Should be equal.");
     } else if (qualifiers.length == 0) {
       throw new IllegalArgumentException("Need at least one qualifier/value.");
-    }
-    for (int i = 0; i < qualifiers.length; i++) {
-      KeyValue.checkQualifier(qualifiers[i]);
-      KeyValue.checkValue(values[i]);
     }
     this.metric = metric;
     this.ts = ts;

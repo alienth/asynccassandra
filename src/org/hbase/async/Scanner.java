@@ -28,12 +28,15 @@ package org.hbase.async;
 
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.DataFormatException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -686,119 +689,73 @@ public final class Scanner implements Runnable {
 
   // private Row<byte[], byte[]> cur_row;
 
+  Iterator<byte[]> iterator;
+
   @Override
   public void run() {
 
-    if (batches == null) {
+    if (keys == null) {
       buildKeys();
-      if (batches.size() == 0) {
+      if (keys.size() == 0) {
         // No matching rows, apparently
         deferred.callback(null);
         return;
       }
-      batch_iterator = batches.values().iterator();
-      current_batch = batch_iterator.next();
-      slice_iterator = current_batch.keyLists.iterator();
+      iterator = keys.iterator();
     }
-    if (iterator == null) {
+    final byte[] key = iterator.next();
+    final byte[] tags = Arrays.copyOfRange(key, metric.length + 1, key.length);
+    List<byte[]> results = client.jedis.lrange(key, 0, 60 * 60 * 3);
 
-      if (!slice_iterator.hasNext()) {
-        if (batch_iterator.hasNext()) {
-          current_batch = batch_iterator.next();
-          slice_iterator = current_batch.keyLists.iterator();
-        } else {
-          deferred.callback(null);
-          return;
-        }
+    final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
 
-      }
-
-      try {
-        // LOG.warn("Starting row query. Start: " +
-        // Bytes.pretty(start_key) + " Stop: " +
-        // Bytes.pretty(stop_key));
-        final OperationResult<Rows<byte[], byte[]>> results = keyspace
-            .prepareQuery(client.getColumnFamilySchemas().get(families[0]))
-            // .getKeySlice(keys.subList(keyIndex,
-            // Math.min(keys.size(), keyIndex + max_num_rows) ))
-            .getKeySlice(slice_iterator.next())
-            .withColumnRange(current_batch.start_col, current_batch.end_col, false, Integer.MAX_VALUE)
-            .execute();
-
-        iterator = results.getResult().iterator();
-      } catch (ConnectionException e) {
-        deferred.callback(e);
-        return;
-      }
-    }
-
-    // Dead code?
-    if (!iterator.hasNext()) {
-      deferred.callback(null);
+    if (results.size() == 0) {
+      deferred.callback(rows);
       // return Deferred.fromResult(null);
       return;
     }
 
-    // TODO - Use less memory here by not duplicating the row key
-    // constantly.
-    // Put all datapoints with the same key in a single row.
-    final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
+    final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(results.size());
+    for (byte[] value : results) {
+        int ts = Bytes.getInt(value, 0);
+        int offset = (ts % MAX_TIMESPAN);
+        int base_time = ts - offset;
 
-    int kv_count = 0;
+        byte[] new_key = new byte[key.length + 4];
+        System.arraycopy(key, 0, new_key, 0, metric.length);
+        Bytes.setInt(new_key, base_time, metric.length + 1);
+        System.arraycopy(tags, 0, new_key, metric.length + 5, tags.length);
 
-    while (kv_count <= max_num_kvs && iterator.hasNext()) {
-      final Row<byte[], byte[]> cur_row = iterator.next();
-      // LOG.debug("Looking at key " + Bytes.pretty(cur_row.getKey()));
+        offset = offset << 10;
+        if (value.length == 6) { // int
+          offset |= 
 
-      ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
-      // if (colIterator != null) {
-      final Iterator<Column<byte[]>> colIterator = cur_row.getColumns().iterator();
-      // LOG.warn("Column names " +
-      // cur_row.getColumns().getColumnNames());
-      // colIterator = cur_row.getColumns().iterator();
-      // }
-      byte[] last_key = EMPTY_ARRAY;
-      while (colIterator.hasNext()) {
-        final Column<byte[]> column = colIterator.next();
+        } else if (value.length == 8) { // float
 
-        final byte[] new_key = cur_row.getKey();
-        if (kvs.size() > 0 && Bytes.memcmp(last_key, new_key) != 0) {
-          rows.add(kvs);
-          kv_count += kvs.size();
-          kvs = new ArrayList<KeyValue>(cur_row.getColumns().size());
+        } else {
+          // throw new DataFormatException("Invalid value length for " + metric + " at " + ts);
         }
-        last_key = new_key;
+        byte[] new_qual = Bytes.fromInt(ts);
 
-        final KeyValue kv = new KeyValue(new_key, families[0], column.getName(), column.getTimestamp() / 1000, // micro
-                                                            // to
-                                                            // ms
-            column.getByteArrayValue());
+        byte[] new_value = Arrays.copyOfRange(value, 3, value.length);
+
+        final KeyValue kv = new KeyValue(new_key, null, new_qual, (long) ts, new_value);
         kvs.add(kv);
-      }
-      if (kvs.size() > 0) {
-        rows.add(kvs);
-        kv_count += kvs.size();
-      }
     }
-
-    if (!iterator.hasNext()) {
-      iterator = null;
+    if (kvs.size() > 0) {
+      rows.add(kvs);
     }
-
     deferred.callback(rows);
   }
 
   private byte[] metric;
-  private int start_ts;
-  private int stop_ts;
-  private ArrayList<byte[]> indexKeys;
   private ArrayList<byte[]> keys;
 
   // TODO: Don't duplicate this here.
   private static final int MAX_TIMESPAN = 2419200;
 
   private void buildKeys() {
-    batches = new HashMap<Integer, KeyBatch>();
+    keys = new ArrayList<byte[]>();
 
     Set<byte[]> rows = new HashSet<byte[]>();
     try {
@@ -819,54 +776,14 @@ public final class Scanner implements Runnable {
         }
       }
       byte[] key = new byte[metric.length + 1 + row.length];
-      KeyBatch batch = batches.get(batchKey);
-      batch.ad
-      System.arraycopy(row.getKey(), 0, fake_key, 0, row.getKey().length);
+      System.arraycopy(metric, 0, key, 0, metric.length);
+      System.arraycopy(row, 0, key, metric.length + 1, row.length);
 
-        int batchKey = Bytes.getInt(row.getKey(), metric.length + 1);
-        if (batch == null) {
-          batch = new KeyBatch();
-          batches.put(batchKey, batch);
-          // If the start_key is before this batch, then don't set start_col
-          // If the stop_key is after this batch, then don't set stop_col.
-          if (start_ts > batchKey) {
-            Bytes.setInt(batch.start_col, (start_ts - batchKey) << 10, 0);
-          }
-          if (stop_ts < (batchKey + MAX_TIMESPAN)) {
-            Bytes.setInt(batch.end_col, (stop_ts - batchKey) << 10, 0);
-            int end_col = ((stop_ts - batchKey) << 10) | (0xFFFF0000 >>> 22);
-            batch.end_col = Bytes.fromInt(end_col);
-          }
-        }
-        batch.add(fake_key);
-        keyCount++;
-      }
+      keys.add(key);
+      keyCount++;
     }
-    LOG.warn("I'll be scanning " + keyCount + " keys.");
+    LOG.warn("I'll be fetching " + keyCount + " keys.");
   }
-
-  private class KeyBatch {
-    ArrayList<ArrayList<byte[]>> keyLists = new ArrayList<ArrayList<byte[]>>();
-    public byte[] start_col = Bytes.fromInt(0);
-    public byte[] end_col = Bytes.fromInt(-1); // 0xFFFFFFFF
-
-    private ArrayList<byte[]> list;
-    public void add(byte[] key) {
-      if (list == null || list.size() >= max_num_rows) {
-        list = new ArrayList<byte[]>(max_num_rows);
-        keyLists.add(list);
-      }
-      list.add(key);
-    }
-
-  }
-
-  private HashMap<Integer, KeyBatch> batches;
-
-
-  private Iterator<KeyBatch> batch_iterator;
-  private Iterator<ArrayList<byte[]>> slice_iterator;
-  private KeyBatch current_batch;
 
 
 }
