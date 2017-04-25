@@ -241,14 +241,6 @@ public final class Scanner implements Runnable {
     this.metric = metric;
   }
 
-  public void setStartTimestamp(int start) {
-    this.start_ts = start;
-  }
-
-  public void setStopTimestamp(int stop) {
-    this.stop_ts = stop;
-  }
-
   /**
    * Specifies up to which row key to scan (exclusive).
    * @param stop_key The row key to scan up to.  If you don't invoke
