@@ -122,7 +122,7 @@ public class HBaseClient {
           final byte[][] values = new byte[row.getValue().size()][];
           row.getValue().toArray(values);
           jedis.lpush(row.getKey().getBytes(CHARSET), values);
-          jedis.ltrim(row.getKey(), 0, 60 * 60 * 3);
+          jedis.ltrim(row.getKey().getBytes(CHARSET), 0, 60 * 60 * 3);
       }
     } catch (Exception e) {
         LOG.warn(e.toString());
