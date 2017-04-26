@@ -109,7 +109,7 @@ public class HBaseClient {
       if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
 
         lpushInternal(buffered_lpush);
-        buffered_lpush = Collections.synchronizedMap(new HashMap<String, List<byte[]>>());
+        buffered_lpush = new HashMap<String, List<byte[]>>();
         num_buffered_pushes.set(0);
       }
     }
@@ -124,7 +124,6 @@ public class HBaseClient {
         row.getValue().toArray(values);
         jedis.lpush(row.getKey().getBytes(CHARSET), values);
         jedis.ltrim(row.getKey(), 0, 60 * 60 * 3);
-        buffered_lpush.remove(row.getKey());
       }
     }
   }
