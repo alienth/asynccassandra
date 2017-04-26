@@ -92,34 +92,41 @@ public class HBaseClient {
   static final short TIMESTAMP_BYTES = 4;
   static short SALT_WIDTH = 0;
 
-  private final Map<String, List<byte[]>> buffered_lpush = Collections.synchronizedMap(new HashMap<String, List<byte[]>>());
+  private Map<String, List<byte[]>> buffered_lpush = Collections.synchronizedMap(new HashMap<String, List<byte[]>>());
   private final AtomicLong num_buffered_pushes = new AtomicLong();
 
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
   public Deferred<Object> lpush(final PutRequest request) {
     String key = new String(request.key(), CHARSET);
-    List<byte[]> lpushes = buffered_lpush.get(key);
-    if (lpushes == null) {
-      lpushes = new ArrayList<byte[]>();
-      buffered_lpush.put(key, lpushes);
-    }
-    lpushes.add(request.value());
-    if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
-      synchronized (buffered_lpush) {
-        for (Entry<String, List<byte[]>> row : buffered_lpush.entrySet()) {
-          try (Jedis jedis = jedisPool.getResource()) {
-            final byte[][] values = new byte[row.getValue().size()][];
-            row.getValue().toArray(values);
-            jedis.lpush(row.getKey().getBytes(CHARSET), values);
-            jedis.ltrim(request.key(), 0, 60 * 60 * 3);
-            buffered_lpush.remove(row.getKey());
-          }
-        }
+    synchronized (buffered_lpush) {
+      List<byte[]> lpushes = buffered_lpush.get(key);
+      if (lpushes == null) {
+        lpushes = new ArrayList<byte[]>();
+        buffered_lpush.put(key, lpushes);
+      }
+      lpushes.add(request.value());
+      if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
+
+        lpushInternal(buffered_lpush);
+        buffered_lpush = Collections.synchronizedMap(new HashMap<String, List<byte[]>>());
         num_buffered_pushes.set(0);
       }
     }
     return Deferred.fromResult(null);
+  }
+
+  private void lpushInternal(Map<String, List<byte[]>> lpushes) {
+
+    for (Entry<String, List<byte[]>> row : buffered_lpush.entrySet()) {
+      try (Jedis jedis = jedisPool.getResource()) {
+        final byte[][] values = new byte[row.getValue().size()][];
+        row.getValue().toArray(values);
+        jedis.lpush(row.getKey().getBytes(CHARSET), values);
+        jedis.ltrim(row.getKey(), 0, 60 * 60 * 3);
+        buffered_lpush.remove(row.getKey());
+      }
+    }
   }
 
   public Deferred<Object> hsetnx(final PutRequest request) {
