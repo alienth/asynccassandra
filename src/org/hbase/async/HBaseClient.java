@@ -125,6 +125,7 @@ public class HBaseClient {
           jedis.ltrim(row.getKey(), 0, 60 * 60 * 3);
       }
     } catch (Exception e) {
+        LOG.warn(e.toString());
         return Deferred.fromError(e);
     }
 
@@ -145,6 +146,7 @@ public class HBaseClient {
     try (Jedis jedis = jedisPool.getResource()) {
       jedis.hsetnx(request.key(), request.value(), ZERO_ARRAY);
     } catch (Exception e) {
+      LOG.warn(e.toString());
       return Deferred.fromError(e);
     }
     return Deferred.fromResult(null);

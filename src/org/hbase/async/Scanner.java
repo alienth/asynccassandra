@@ -754,7 +754,6 @@ public final class Scanner implements Runnable {
   private void buildKeys() {
     keys = new ArrayList<byte[]>();
 
-    jedis = client.jedisPool.getResource();
     Set<byte[]> rows = jedis.hkeys(metric);
     
     int keyCount = 0;
