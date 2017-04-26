@@ -1,9 +1,11 @@
 package org.hbase.async;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -67,6 +69,23 @@ public class HBaseClient {
     jedisPool = new JedisPool(new JedisPoolConfig(), config.getString("redis.server"));
   }
   
+  private static final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(30000);
+
+  private static class MaxSizeHashMap<K, V> extends LinkedHashMap<K, V> {
+    private static final long serialVersionUID = 1L;
+    private final int maxSize;
+
+    public MaxSizeHashMap(int maxSize) {
+      this.maxSize = maxSize;
+    }
+
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+      return size() > maxSize;
+    }
+  }
+
+
   static short METRICS_WIDTH = 3;
   static short TAG_NAME_WIDTH = 3;
   static short TAG_VALUE_WIDTH = 3;
@@ -94,14 +113,25 @@ public class HBaseClient {
             row.getValue().toArray(values);
             jedis.lpush(row.getKey().getBytes(CHARSET), values);
             jedis.ltrim(request.key(), 0, 60 * 60 * 3);
+            buffered_lpush.remove(row.getKey());
           }
         }
+        num_buffered_pushes.set(0);
       }
     }
     return Deferred.fromResult(null);
   }
 
   public Deferred<Object> hsetnx(final PutRequest request) {
+    synchronized (indexedKeys) {
+      if (indexedKeys.put(ByteBuffer.wrap(request.key()), true) != null) {
+        // We already indexed this key
+        return Deferred.fromResult(null);
+      }
+    }
+
+    LOG.warn("Putting index for metric " + request.key());
+
     Jedis jedis = null;
     try {
       jedis = jedisPool.getResource();
