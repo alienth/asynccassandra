@@ -107,43 +107,45 @@ public class HBaseClient {
       }
       lpushes.add(request.value());
       if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
-
-        lpushInternal(buffered_lpush);
-        buffered_lpush = new HashMap<String, List<byte[]>>();
         num_buffered_pushes.set(0);
+        Map<String, List<byte[]>> lpush_batch = buffered_lpush;
+        buffered_lpush = new HashMap<String, List<byte[]>>();
+        return lpushInternal(lpush_batch);
       }
     }
     return Deferred.fromResult(null);
   }
 
-  private void lpushInternal(Map<String, List<byte[]>> lpushes) {
-
-    for (Entry<String, List<byte[]>> row : buffered_lpush.entrySet()) {
-      try (Jedis jedis = jedisPool.getResource()) {
-        final byte[][] values = new byte[row.getValue().size()][];
-        row.getValue().toArray(values);
-        jedis.lpush(row.getKey().getBytes(CHARSET), values);
-        jedis.ltrim(row.getKey(), 0, 60 * 60 * 3);
+  private Deferred<Object> lpushInternal(Map<String, List<byte[]>> lpushes) {
+    try (Jedis jedis = jedisPool.getResource()) {
+      for (Entry<String, List<byte[]>> row : lpushes.entrySet()) {
+          final byte[][] values = new byte[row.getValue().size()][];
+          row.getValue().toArray(values);
+          jedis.lpush(row.getKey().getBytes(CHARSET), values);
+          jedis.ltrim(row.getKey(), 0, 60 * 60 * 3);
       }
+    } catch (Exception e) {
+        return Deferred.fromError(e);
     }
+
+    return Deferred.fromResult(null);
   }
 
   public Deferred<Object> hsetnx(final PutRequest request) {
     synchronized (indexedKeys) {
-      if (indexedKeys.put(ByteBuffer.wrap(request.key()), true) != null) {
-        // We already indexed this key
+      byte[] check = new byte[request.key().length + request.value().length];
+      System.arraycopy(request.key(), 0, check, 0, request.key().length);
+      System.arraycopy(request.value(), 0, check, request.key().length, request.value().length);
+      if (indexedKeys.put(ByteBuffer.wrap(check), true) != null) {
+        // We already indexed this
         return Deferred.fromResult(null);
       }
     }
 
-    Jedis jedis = null;
-    try {
-      jedis = jedisPool.getResource();
+    try (Jedis jedis = jedisPool.getResource()) {
       jedis.hsetnx(request.key(), request.value(), ZERO_ARRAY);
-    } finally {
-      if (jedis != null) {
-        jedis.close();
-      }
+    } catch (Exception e) {
+      return Deferred.fromError(e);
     }
     return Deferred.fromResult(null);
   }
