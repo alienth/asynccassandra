@@ -1,7 +1,12 @@
 package org.hbase.async;
 
+import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
@@ -68,10 +73,30 @@ public class HBaseClient {
   static final short TIMESTAMP_BYTES = 4;
   static short SALT_WIDTH = 0;
 
+  private final Map<String, List<byte[]>> buffered_lpush = Collections.synchronizedMap(new HashMap<String, List<byte[]>>());
+  private final AtomicLong num_buffered_pushes = new AtomicLong();
+
+  private static final Charset CHARSET = Charset.forName("ISO-8859-1");
+
   public Deferred<Object> lpush(final PutRequest request) {
-    try (Jedis jedis = jedisPool.getResource()) {
-      jedis.lpush(request.key(), request.value());
-      jedis.ltrim(request.key(), 0, 60 * 60 * 3);
+    String key = new String(request.key(), CHARSET);
+    List<byte[]> lpushes = buffered_lpush.get(key);
+    if (lpushes == null) {
+      lpushes = new ArrayList<byte[]>();
+      buffered_lpush.put(key, lpushes);
+    }
+    lpushes.add(request.value());
+    if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
+      synchronized (buffered_lpush) {
+        for (Entry<String, List<byte[]>> row : buffered_lpush.entrySet()) {
+          try (Jedis jedis = jedisPool.getResource()) {
+            final byte[][] values = new byte[row.getValue().size()][];
+            row.getValue().toArray(values);
+            jedis.lpush(row.getKey().getBytes(CHARSET), values);
+            jedis.ltrim(request.key(), 0, 60 * 60 * 3);
+          }
+        }
+      }
     }
     return Deferred.fromResult(null);
   }
