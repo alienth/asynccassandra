@@ -69,7 +69,7 @@ public class HBaseClient {
     jedisPool = new JedisPool(new JedisPoolConfig(), config.getString("redis.server"));
   }
   
-  private static final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(30000);
+  private static final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(1000000);
 
   private static class MaxSizeHashMap<K, V> extends LinkedHashMap<K, V> {
     private static final long serialVersionUID = 1L;
