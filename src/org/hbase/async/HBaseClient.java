@@ -92,7 +92,7 @@ public class HBaseClient {
   static final short TIMESTAMP_BYTES = 4;
   static short SALT_WIDTH = 0;
 
-  private Map<String, List<byte[]>> buffered_lpush = Collections.synchronizedMap(new HashMap<String, List<byte[]>>());
+  private Map<String, List<byte[]>> buffered_lpush = new HashMap<String, List<byte[]>>();
   private final AtomicLong num_buffered_pushes = new AtomicLong();
 
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
@@ -136,8 +136,6 @@ public class HBaseClient {
         return Deferred.fromResult(null);
       }
     }
-
-    LOG.warn("Putting index for metric " + request.key());
 
     Jedis jedis = null;
     try {
