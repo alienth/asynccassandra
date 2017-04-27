@@ -5,7 +5,6 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -131,8 +130,6 @@ public class HBaseClient {
           final byte[][] values = new byte[row.getValue().size()][];
           row.getValue().toArray(values);
           jedis.lpush(row.getKey().getBytes(CHARSET), values);
-          metrics.add(row.getKey());
-          // jedis.ltrim(row.getKey().getBytes(CHARSET), 0, 1000);
       }
     } catch (Exception e) {
         LOG.warn(e.toString());
@@ -152,6 +149,8 @@ public class HBaseClient {
         return Deferred.fromResult(null);
       }
     }
+
+    metrics.add(new String(request.key(), CHARSET));
 
     try (Jedis jedis = jedisPool.getResource()) {
       jedis.hsetnx(request.key(), request.value(), ZERO_ARRAY);
@@ -222,14 +221,13 @@ public class HBaseClient {
               System.arraycopy(metric, 0, key, 0, metric.length);
               System.arraycopy(tag, 0, key, metric.length + 1, tag.length);
               jedis.ltrim(key, 0, 1000);
-              LOG.warn("Trimming key " + new String(key, CHARSET));
             }
           } catch (Exception e) {
             LOG.error("Error while performing periodic ltrim: " + e);
           }
         }
         try {
-          Thread.sleep(60000);
+          Thread.sleep(600000);
         } catch (InterruptedException e) {
             LOG.error("Trim thread interrupted", e);
             return;
