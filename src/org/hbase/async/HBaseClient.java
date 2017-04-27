@@ -5,10 +5,13 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
@@ -67,6 +70,10 @@ public class HBaseClient {
           "Missing required config 'redis.server'");
     }
     jedisPool = new JedisPool(new JedisPoolConfig(), config.getString("redis.server"));
+
+    final TrimThread thread = new TrimThread();
+    thread.setDaemon(true);
+    thread.start();
   }
   
   private static final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(1000000);
@@ -116,13 +123,16 @@ public class HBaseClient {
     return Deferred.fromResult(null);
   }
 
+  private Set<String> metrics = Collections.newSetFromMap(new ConcurrentHashMap<String,Boolean>());
+
   private Deferred<Object> lpushInternal(Map<String, List<byte[]>> lpushes) {
     try (Jedis jedis = jedisPool.getResource()) {
       for (Entry<String, List<byte[]>> row : lpushes.entrySet()) {
           final byte[][] values = new byte[row.getValue().size()][];
           row.getValue().toArray(values);
           jedis.lpush(row.getKey().getBytes(CHARSET), values);
-          jedis.ltrim(row.getKey().getBytes(CHARSET), 0, 1000);
+          metrics.add(row.getKey());
+          // jedis.ltrim(row.getKey().getBytes(CHARSET), 0, 1000);
       }
     } catch (Exception e) {
         LOG.warn(e.toString());
@@ -194,4 +204,39 @@ public class HBaseClient {
     num_scans.incrementAndGet();
   }
   
+
+  final class TrimThread extends Thread {
+    public TrimThread() {
+      super("TrimThread");
+    }
+
+    @Override
+    public void run() {
+      while (true) {
+        for (String metricStr : metrics) {
+          final byte[] metric = metricStr.getBytes(CHARSET);
+          try (Jedis jedis = jedisPool.getResource()) {
+            Set<byte[]> tags = jedis.hkeys(metric);
+            for (byte[] tag : tags) {
+              byte[] key = new byte[metric.length + 1 + tag.length];
+              System.arraycopy(metric, 0, key, 0, metric.length);
+              System.arraycopy(tag, 0, key, metric.length + 1, tag.length);
+              jedis.ltrim(key, 0, 1000);
+              LOG.warn("Trimming key " + new String(key, CHARSET));
+            }
+          } catch (Exception e) {
+            LOG.error("Error while performing periodic ltrim: " + e);
+          }
+        }
+        try {
+          Thread.sleep(60000);
+        } catch (InterruptedException e) {
+            LOG.error("Trim thread interrupted", e);
+            return;
+        }
+      }
+    }
+
+  }
+
 }
