@@ -244,6 +244,14 @@ public final class Scanner implements Runnable {
     this.metric = metric;
   }
 
+  public void setStartTimestamp(int start) {
+    this.start_ts = start;
+  }
+
+  public void setStopTimestamp(int stop) {
+    this.stop_ts = stop;
+  }
+
   /**
    * Specifies up to which row key to scan (exclusive).
    * @param stop_key The row key to scan up to.  If you don't invoke
@@ -681,6 +689,9 @@ public final class Scanner implements Runnable {
 
   Iterator<byte[]> iterator;
 
+  private int start_ts;
+  private int stop_ts;
+
   @Override
   public void run() {
 
@@ -716,6 +727,9 @@ public final class Scanner implements Runnable {
     final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(results.size());
     for (byte[] value : results) {
         int ts = Bytes.getInt(value, 0);
+        if (ts < start_ts || ts > stop_ts) {
+          continue;
+        }
         short flags = Bytes.getShort(value, 4);
         int offset = (ts % MAX_TIMESPAN);
         int base_time = ts - offset;
