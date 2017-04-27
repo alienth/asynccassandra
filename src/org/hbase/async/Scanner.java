@@ -106,7 +106,7 @@ public final class Scanner implements Runnable {
   
   private final HBaseClient client;
 
-  final ExecutorService executor = Executors.newFixedThreadPool(25);
+  private final ExecutorService executor;
   
   /**
    * The key to start scanning from.  An empty array means "start from the
@@ -175,8 +175,9 @@ public final class Scanner implements Runnable {
    * Constructor.
    * <strong>This byte array will NOT be copied.</strong>
    */
-  Scanner(final HBaseClient client) {
+  Scanner(final HBaseClient client, final ExecutorService executor) {
     this.client = client;
+    this.executor = executor;
     this.jedis = client.jedisPool.getResource();
   }
 

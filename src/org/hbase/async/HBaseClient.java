@@ -8,6 +8,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +35,7 @@ public class HBaseClient {
   
   final JedisPool jedisPool;
   final Config config;
+  final ExecutorService executor = Executors.newFixedThreadPool(25);
 
   //------------------------ //
   // Client usage statistics. //
@@ -172,12 +176,13 @@ public class HBaseClient {
   
   public Scanner newScanner(final Object table) {
     num_scanners_opened.incrementAndGet();
-    return new Scanner(this);
+    return new Scanner(this, executor);
   }
   
   public Deferred<Object> shutdown() {
     try {
       jedisPool.destroy();
+      executor.shutdown();
     } catch (Exception e) {
       LOG.error("failed to close connection to redis", e);
     }
