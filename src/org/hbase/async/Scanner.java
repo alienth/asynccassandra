@@ -651,6 +651,8 @@ public final class Scanner implements Runnable {
 //    if (scanner != null) {
 //      scanner.close();
 //    }
+
+    jedis.close();
     return Deferred.fromResult(null);
   }
 
@@ -701,14 +703,12 @@ public final class Scanner implements Runnable {
       if (keys.size() == 0) {
         // No matching rows, apparently
         deferred.callback(null);
-        jedis.close();
         return;
       }
       iterator = keys.iterator();
     }
     if (!iterator.hasNext()) {
       deferred.callback(null);
-      jedis.close();
       return;
     }
     final byte[] key = iterator.next();
@@ -754,7 +754,6 @@ public final class Scanner implements Runnable {
     }
     deferred.callback(rows);
     } catch (Exception e) {
-      jedis.close();
       deferred.callback(e);
     }
   }
