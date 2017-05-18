@@ -84,17 +84,26 @@ public class HBaseClient {
     connectionPool.setUrl(String.format("jdbc:sqlserver://%s;user=%s;password=%s", config.getString("sql.server"), config.getString("sql.user"), config.getString("sql.password")));
     connectionPool.setInitialSize(10);
 
+    Connection connection = null;
     try {
-      Connection connection = connectionPool.getConnection();
-      Statement stmt = connection.createStatement();
+      connection = connectionPool.getConnection();
+      // Statement stmt = connection.createStatement();
       // stmt.executeUpdate("CREATE TABLE test (test timestamp)");
       // ResultSet rs = stmt.executeQuery("SELECT * from [dbo].[os.cpu]");
-      ResultSet rs = connection.getMetaData().getTables(null, "dbo", "%", null);
-      while (rs.next()) {
-        LOG.warn(rs.toString());
-      }
+      // ResultSet rs = connection.getMetaData().getTables(null, "dbo", "%", null);
+      // while (rs.next()) {
+      //   LOG.warn(rs.toString());
+      // }
     } catch (Exception e) {
       LOG.warn(e + "");
+    } finally {
+      if (connection != null) {
+        try {
+        connection.close();
+        } catch (SQLException e) {
+          // boo
+        }
+      }
     }
 
     final TrimThread thread = new TrimThread();
@@ -130,21 +139,38 @@ public class HBaseClient {
 
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
-  public Deferred<Object> lpush(final PutRequest request) {
-    String key = new String(request.key(), CHARSET);
-    synchronized (buffered_lpush) {
-      List<byte[]> lpushes = buffered_lpush.get(key);
-      if (lpushes == null) {
-        lpushes = new ArrayList<byte[]>();
-        buffered_lpush.put(key, lpushes);
-      }
-      lpushes.add(request.value());
-      if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
-        num_buffered_pushes.set(0);
-        Map<String, List<byte[]>> lpush_batch = buffered_lpush;
-        buffered_lpush = new HashMap<String, List<byte[]>>();
-        return lpushInternal(lpush_batch);
-      }
+  public Deferred<Object> insert(final String metric, final long timestamp, Map<String, String> tagm, final float value) {
+    // String key = new String(request.key(), CHARSET);
+    // synchronized (buffered_lpush) {
+    //   List<byte[]> lpushes = buffered_lpush.get(key);
+    //   if (lpushes == null) {
+    //     lpushes = new ArrayList<byte[]>();
+    //     buffered_lpush.put(key, lpushes);
+    //   }
+    //   lpushes.add(request.value());
+    //   if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
+    //     num_buffered_pushes.set(0);
+    //     Map<String, List<byte[]>> lpush_batch = buffered_lpush;
+    //     buffered_lpush = new HashMap<String, List<byte[]>>();
+    //     return lpushInternal(lpush_batch);
+    //   }
+    // }
+
+    try (Connection connection = connectionPool.getConnection()) {
+      String insert = "INSERT INTO [dbo].[os.cpu] (host, cpu, date, time, value) VALUES (?, ?, ?, ?, ?)";
+      PreparedStatement stmt = connection.prepareStatement(insert);
+      // stmt.setString(1, metric);
+      stmt.setString(1, tagm.get("host"));
+      stmt.setString(2, tagm.get("cpu"));
+      stmt.setDate(3, new Date(timestamp));
+      stmt.setTime(4, new Time(timestamp));
+      stmt.setFloat(5, value);
+      stmt.executeUpdate();
+      // stmt.setDate(request.t
+      // Statement stmt = connection.createStatement();
+
+    } catch (SQLException e) {
+      return Deferred.fromError(e);
     }
     return Deferred.fromResult(null);
   }
