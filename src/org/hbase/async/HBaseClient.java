@@ -157,14 +157,28 @@ public class HBaseClient {
     // }
 
     try (Connection connection = connectionPool.getConnection()) {
-      String insert = "INSERT INTO [dbo].[os.cpu] (host, cpu, date, time, value) VALUES (?, ?, ?, ?, ?)";
+      final StringBuilder columns = new StringBuilder(100);
+      final StringBuilder values = new StringBuilder(20);
+      final String[] keys = new String[tagm.size()];
+      tagm.keySet().toArray(keys);
+      for (String key : keys) {
+        columns.append(key);
+        columns.append(", ");
+        values.append("?,");
+      }
+
+      // TODO: prevent injection
+      String insert = String.format("INSERT INTO [dbo].[%s] (%s date, time, value) VALUES (%s ?, ?, ?)", metric, columns, values);
       PreparedStatement stmt = connection.prepareStatement(insert);
       // stmt.setString(1, metric);
-      stmt.setString(1, tagm.get("host"));
-      stmt.setString(2, tagm.get("cpu"));
-      stmt.setDate(3, new Date(timestamp));
-      stmt.setTime(4, new Time(timestamp));
-      stmt.setFloat(5, value);
+
+      final int tagCount = tagm.size();
+      for (int i = 0; i < tagCount; i++) {
+        stmt.setString(i+1, tagm.get(keys[i]));
+      }
+      stmt.setDate(tagCount+1, new Date(timestamp));
+      stmt.setTime(tagCount+2, new Time(timestamp));
+      stmt.setFloat(tagCount+3, value);
       stmt.executeUpdate();
       // stmt.setDate(request.t
       // Statement stmt = connection.createStatement();
