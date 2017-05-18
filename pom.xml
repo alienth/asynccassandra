@@ -172,6 +172,8 @@
 	    <type>jar</type>
 	    <scope>compile</scope>
 	</dependency>
+
+
         
         <!-- runtime dependencies -->
         <dependency>
@@ -223,7 +225,17 @@
             <artifactId>powermock-api-mockito</artifactId>
             <version>1.5.4</version>
         </dependency>
-        
+
+        <dependency>
+        	<groupId>com.microsoft.sqlserver</groupId>
+        	<artifactId>mssql-jdbc</artifactId>
+        	<version>6.1.0.jre8</version>
+        </dependency>
+        <dependency>
+        	<groupId>org.apache.commons</groupId>
+        	<artifactId>commons-dbcp2</artifactId>
+        	<version>2.1.1</version>
+        </dependency>
     </dependencies>
     
     <properties>

@@ -25,6 +25,10 @@ import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
 
+import com.microsoft.sqlserver.jdbc.*;
+import java.sql.*;
+import org.apache.commons.dbcp2.*;
+
 public class HBaseClient {
   private static final Logger LOG = LoggerFactory.getLogger(HBaseClient.class);
   
@@ -34,6 +38,7 @@ public class HBaseClient {
   static final byte[] ZERO_ARRAY = new byte[] { 0 };
   
   final JedisPool jedisPool;
+  final BasicDataSource connectionPool;
   final Config config;
   final ExecutorService executor = Executors.newFixedThreadPool(25);
 
@@ -73,6 +78,24 @@ public class HBaseClient {
           "Missing required config 'redis.server'");
     }
     jedisPool = new JedisPool(new JedisPoolConfig(), config.getString("redis.server"));
+
+    connectionPool = new BasicDataSource();
+    connectionPool.setDriverClassName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+    connectionPool.setUrl(String.format("jdbc:sqlserver://%s;user=%s;password=%s", config.getString("sql.server"), config.getString("sql.user"), config.getString("sql.password")));
+    connectionPool.setInitialSize(10);
+
+    try {
+      Connection connection = connectionPool.getConnection();
+      Statement stmt = connection.createStatement();
+      // stmt.executeUpdate("CREATE TABLE test (test timestamp)");
+      // ResultSet rs = stmt.executeQuery("SELECT * from [dbo].[os.cpu]");
+      ResultSet rs = connection.getMetaData().getTables(null, "dbo", "%", null);
+      while (rs.next()) {
+        LOG.warn(rs.toString());
+      }
+    } catch (Exception e) {
+      LOG.warn(e + "");
+    }
 
     final TrimThread thread = new TrimThread();
     thread.setDaemon(true);
