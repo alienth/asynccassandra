@@ -137,6 +137,8 @@ public class HBaseClient {
   static final short TIMESTAMP_BYTES = 4;
   static short SALT_WIDTH = 0;
 
+  private HashMap<String, Set<String>> tables = new HashMap<String, Set<String>>();
+
   private Map<String, List<byte[]>> buffered_lpush = new HashMap<String, List<byte[]>>();
   private final AtomicLong num_buffered_pushes = new AtomicLong();
 
@@ -166,63 +168,14 @@ public class HBaseClient {
       final Set<String> tagSet = tagm.keySet();
       tagSet.toArray(keys);
 
+      Set<String> tableTags;
+      synchronized(tables) {
+        tableTags = tables.get(metric);
+      }
+      if (tableTags != null && tableTags.equals(tagSet)) {
 
-      Statement stmt;
-      DatabaseMetaData md = connection.getMetaData();
-      ResultSet rs = md.getTables(null, "dbo", metric, new String[] {"TABLE"});
-      if (!rs.next()) {
-        final StringBuilder columnDefs = new StringBuilder(100);
-        for (String key : keys) {
-          columnDefs.append("[tag.");
-          columnDefs.append(key);
-          columnDefs.append("] nvarchar(100) NULL,");
-        }
-        columnDefs.append("timestamp datetime NOT NULL, value float NOT NULL");
-
-        String create = String.format("CREATE TABLE [dbo].[%s] (%s);", metric, columnDefs);
-        String index = String.format("CREATE Clustered Columnstore Index [CCI_%s] ON [dbo].[%s];", metric, metric);
-
-        stmt = connection.createStatement();
-        stmt.executeUpdate(create);
-        stmt = connection.createStatement();
-        stmt.executeUpdate(index);
       } else {
-        rs = md.getColumns(null, null, metric, "tag.%");
-        // stmt = connection.createStatement();
-        // String query = String.format("select * from [dbo].[%s] LIMIT 1");
-        
-        final Set<String> columnSet = new HashSet<String>();
-        while (rs.next()) {
-          ResultSetMetaData rsMeta = rs.getMetaData();
-          for (int i = 1; i <= rsMeta.getColumnCount(); i++) {
-            String name = rs.getString(i);
-            LOG.warn(name);
-            LOG.warn(rsMeta.getColumnName(i));
-            if (name != null && name.startsWith("tag.")) {
-              columnSet.add(rs.getString(i).replaceFirst("^tag\\.", ""));
-            }
-          }
-        }
-
-        Set<String> foo = new HashSet<String>(tagSet);
-        LOG.warn(columnSet.toString());
-        LOG.warn(tagSet.toString());
-        foo.removeAll(columnSet);
-        
-        if (foo.size() > 0) {
-          final StringBuilder alter = new StringBuilder(200);
-          alter.append(String.format("ALTER TABLE [dbo].[%s] ADD ", metric));
-          for (String column : foo) {
-            alter.append(String.format(" [tag.%s] nvarchar(100) NULL,", column));
-          }
-          alter.setLength(alter.length() - 1);
-          stmt = connection.createStatement();
-          LOG.warn(alter.toString());
-          stmt.executeUpdate(alter.toString());
-
-        }
-        
-
+        syncSchema(connection, metric, tagSet);
       }
 
       final StringBuilder columns = new StringBuilder(100);
@@ -255,6 +208,77 @@ public class HBaseClient {
       return Deferred.fromError(e);
     }
     return Deferred.fromResult(null);
+  }
+
+  public void syncSchema(Connection connection, String metric, Set<String> tags) throws SQLException {
+    Statement stmt;
+    DatabaseMetaData md = connection.getMetaData();
+    ResultSet rs = md.getTables(null, "dbo", metric, new String[] {"TABLE"});
+    if (!rs.next()) {
+      final StringBuilder columnDefs = new StringBuilder(100);
+      for (String key : tags) {
+        columnDefs.append("[tag.");
+        columnDefs.append(key);
+        columnDefs.append("] nvarchar(100) NULL,");
+      }
+      columnDefs.append("timestamp datetime NOT NULL, value float NOT NULL");
+
+      String create = String.format("CREATE TABLE [dbo].[%s] (%s);", metric, columnDefs);
+      String index = String.format("CREATE Clustered Columnstore Index [CCI_%s] ON [dbo].[%s];", metric, metric);
+
+      LOG.warn("Creating table " + metric);
+      stmt = connection.createStatement();
+      stmt.executeUpdate(create);
+      stmt = connection.createStatement();
+      stmt.executeUpdate(index);
+
+      Set<String> foo = new HashSet<String>(tags);
+      synchronized (tables) {
+        tables.put(metric, foo);
+      }
+    } else {
+      rs = md.getColumns(null, null, metric, "tag.%");
+      // stmt = connection.createStatement();
+      // String query = String.format("select * from [dbo].[%s] LIMIT 1");
+      
+      final Set<String> columnSet = new HashSet<String>();
+      while (rs.next()) {
+        ResultSetMetaData rsMeta = rs.getMetaData();
+        for (int i = 1; i <= rsMeta.getColumnCount(); i++) {
+          String name = rs.getString(i);
+          LOG.warn(name);
+          LOG.warn(rsMeta.getColumnName(i));
+          if (name != null && name.startsWith("tag.")) {
+            columnSet.add(rs.getString(i).replaceFirst("^tag\\.", ""));
+          }
+        }
+      }
+
+      Set<String> foo = new HashSet<String>(tags);
+      foo.removeAll(columnSet);
+      
+      if (foo.size() > 0) {
+        final StringBuilder alter = new StringBuilder(200);
+        alter.append(String.format("ALTER TABLE [dbo].[%s] ADD ", metric));
+        for (String column : foo) {
+          alter.append(String.format(" [tag.%s] nvarchar(100) NULL,", column));
+        }
+        alter.setLength(alter.length() - 1);
+
+        LOG.warn("Altering table " + metric);
+        stmt = connection.createStatement();
+        LOG.warn(alter.toString());
+        stmt.executeUpdate(alter.toString());
+
+        Set<String> foo2 = new HashSet<String>(tags);
+        synchronized (tables) {
+          tables.put(metric, foo2);
+        }
+      }
+    }
+
+
+
   }
 
   private Set<String> metrics = Collections.newSetFromMap(new ConcurrentHashMap<String,Boolean>());
