@@ -206,8 +206,8 @@ public class HBaseClient {
     public Object[] getRowData() throws SQLServerException {
       Datapoint dp = dps.get(cursor - 1);
       Object[] results = new Object[2 + dp.tagm.size()];
-      results[0] = dp.value;
-      results[1] = dp.timestamp;
+      results[0] = new Double(dp.value);
+      results[1] = new Timestamp(dp.timestamp);
       int i = 2;
       for (String tagk : tags) {
         results[i] = dp.tagm.get(tagk);
@@ -288,6 +288,11 @@ public class HBaseClient {
 
       for (Entry<String, DatapointBatch> entry : batches.entrySet()) {
         SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
+        bulkCopy.addColumnMapping("value", "value");
+        bulkCopy.addColumnMapping("timestamp", "timestamp");
+        for (String tag : entry.getValue().tags) {
+          bulkCopy.addColumnMapping(tag, "tag." + tag);
+        }
         bulkCopy.setDestinationTableName("[" + entry.getKey() + "]");
         bulkCopy.writeToServer(entry.getValue());
         bulkCopy.close();
