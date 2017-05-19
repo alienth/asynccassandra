@@ -142,7 +142,7 @@ public class HBaseClient {
 
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
-  public Deferred<Object> insert(final String metric, Map<String, String> tagm, final byte[] value) {
+  public Deferred<Object> insert(final String metric, Map<String, String> tagm, final long timestamp, final double value) {
     // String key = new String(request.key(), CHARSET);
     // synchronized (buffered_lpush) {
     //   List<byte[]> lpushes = buffered_lpush.get(key);
@@ -177,7 +177,7 @@ public class HBaseClient {
           columnDefs.append(key);
           columnDefs.append("] nvarchar(100) NULL,");
         }
-        columnDefs.append(" value varbinary(8) NOT NULL");
+        columnDefs.append("timestamp datetime NOT NULL, value float NOT NULL");
 
         String create = String.format("CREATE TABLE [dbo].[%s] (%s);", metric, columnDefs);
 
@@ -230,8 +230,8 @@ public class HBaseClient {
         columns.append("], ");
         values.append("?,");
       }
-      columns.append("value");
-      values.append(" ?");
+      columns.append("timestamp, value");
+      values.append(" ?, ?");
 
       // TODO: prevent injection
       String insert = String.format("INSERT INTO [dbo].[%s] (%s) VALUES (%s)", metric, columns, values);
@@ -242,7 +242,8 @@ public class HBaseClient {
       for (int i = 0; i < tagCount; i++) {
         prep.setString(i+1, tagm.get(keys[i]));
       }
-      prep.setBytes(tagCount+1, value);
+      prep.setTimestamp(tagCount+1, new Timestamp(timestamp));
+      prep.setDouble(tagCount+2, value);
       prep.executeUpdate();
       // stmt.setDate(request.t
       // Statement stmt = connection.createStatement();
