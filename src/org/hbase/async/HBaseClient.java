@@ -246,8 +246,6 @@ public class HBaseClient {
         ResultSetMetaData rsMeta = rs.getMetaData();
         for (int i = 1; i <= rsMeta.getColumnCount(); i++) {
           String name = rs.getString(i);
-          LOG.warn(name);
-          LOG.warn(rsMeta.getColumnName(i));
           if (name != null && name.startsWith("tag.")) {
             columnSet.add(rs.getString(i).replaceFirst("^tag\\.", ""));
           }
@@ -270,11 +268,12 @@ public class HBaseClient {
         LOG.warn(alter.toString());
         stmt.executeUpdate(alter.toString());
 
-        Set<String> foo2 = new HashSet<String>(tags);
-        synchronized (tables) {
-          tables.put(metric, foo2);
-        }
       }
+      Set<String> foo2 = new HashSet<String>(tags);
+      synchronized (tables) {
+        tables.put(metric, foo2);
+      }
+
     }
 
 
