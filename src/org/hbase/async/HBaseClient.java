@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -14,6 +15,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -131,6 +134,120 @@ public class HBaseClient {
   }
 
 
+  private class Datapoint {
+    public final String metric;
+    public final Map<String, String> tagm;
+    public final long timestamp;
+    public final double value;
+
+    public Datapoint(final String metric, final Map<String, String> tagm, final long timestamp, final double value) {
+      this.metric = metric;
+      this.tagm = tagm;
+      this.timestamp = timestamp;
+      this.value = value;
+    }
+  }
+
+  // When a new datapoint comes in, we grab a batch by the metric it came in on.
+  // We check to ensure the batch is aware of all of the tag keys.
+
+  private class DatapointBatch implements ISQLServerBulkRecord {
+    private int valueOrd = 1;
+    private int timestampOrd = 2;
+
+    // private final HashMap<String, String> tagm = new HashMap<String, String>();
+    // private final double value = 0;
+    // private final Timestamp timestamp;
+
+    private final List<Datapoint> dps = new ArrayList<Datapoint>();
+
+    private final List<String> tags = new ArrayList<String>();
+
+
+    private int cursor = 0;
+
+    public void add(Datapoint d) {
+      dps.add(d);
+      for (String tag : d.tagm.keySet()) {
+        if (!tags.contains(tag)) {
+          tags.add(tag);
+        }
+      }
+    }
+
+    public boolean isAutoIncrement(int column) {
+      return false;
+    }
+
+    public int getScale(int column) {
+      if (column == valueOrd) {
+        return 1;
+      }
+      return 0;
+    }
+
+    public String getColumnName(int column) {
+      if (column == valueOrd) {
+        return "value";
+      } else if (column == timestampOrd) {
+        return "timestamp";
+      }
+      return tags.get(column - 3);
+    }
+
+    public boolean next() throws SQLServerException {
+      cursor++;
+      if (cursor > dps.size()) {
+        return false;
+      }
+      return true;
+    }
+
+    public Object[] getRowData() throws SQLServerException {
+      Datapoint dp = dps.get(cursor - 1);
+      Object[] results = new Object[2 + dp.tagm.size()];
+      results[0] = dp.value;
+      results[1] = dp.timestamp;
+      int i = 2;
+      for (String tagk : tags) {
+        results[i] = dp.tagm.get(tagk);
+        i++;
+      }
+      return results;
+    }
+
+    public Set<Integer> getColumnOrdinals() {
+      HashSet<Integer> result = new HashSet<Integer>();
+
+      result.add(1); //value
+      result.add(2); //timestamp
+      
+      int i = 2;
+      for (Object ignored : tags) {
+        i++;
+        result.add(i);
+      }
+      return result;
+    }
+
+    public int getColumnType(int column) {
+      if (column == valueOrd) {
+        return java.sql.Types.DOUBLE;
+      } else if (column == timestampOrd) {
+        return java.sql.Types.TIMESTAMP;
+      } else {
+        return java.sql.Types.VARCHAR;
+      }
+    }
+    public int getPrecision(int column) {
+      if (column == valueOrd) {
+        return 53;
+      }
+      return 100;
+    }
+
+  }
+
   static short METRICS_WIDTH = 3;
   static short TAG_NAME_WIDTH = 3;
   static short TAG_VALUE_WIDTH = 3;
@@ -139,72 +256,86 @@ public class HBaseClient {
 
   private HashMap<String, Set<String>> tables = new HashMap<String, Set<String>>();
 
+  private Map<String, DatapointBatch> buffered_datapoint = new HashMap<String, DatapointBatch>();
   private Map<String, List<byte[]>> buffered_lpush = new HashMap<String, List<byte[]>>();
   private final AtomicLong num_buffered_pushes = new AtomicLong();
 
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
-  public Deferred<Object> insert(final String metric, Map<String, String> tagm, final long timestamp, final double value) {
+  public Deferred<Object> insert(final String metric, final Map<String, String> tagm, final long timestamp, final double value) {
     // String key = new String(request.key(), CHARSET);
-    // synchronized (buffered_lpush) {
-    //   List<byte[]> lpushes = buffered_lpush.get(key);
-    //   if (lpushes == null) {
-    //     lpushes = new ArrayList<byte[]>();
-    //     buffered_lpush.put(key, lpushes);
-    //   }
-    //   lpushes.add(request.value());
-    //   if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
-    //     num_buffered_pushes.set(0);
-    //     Map<String, List<byte[]>> lpush_batch = buffered_lpush;
-    //     buffered_lpush = new HashMap<String, List<byte[]>>();
-    //     return lpushInternal(lpush_batch);
-    //   }
-    // }
-
-
-    try (Connection connection = connectionPool.getConnection()) {
-
-      final String[] keys = new String[tagm.size()];
-      final Set<String> tagSet = tagm.keySet();
-      tagSet.toArray(keys);
-
-      Set<String> tableTags;
-      synchronized(tables) {
-        tableTags = tables.get(metric);
+    synchronized (buffered_datapoint) {
+      DatapointBatch dps = buffered_datapoint.get(metric);
+      if (dps == null) {
+        dps = new DatapointBatch();
+        buffered_datapoint.put(metric, dps);
       }
-      if (tableTags != null && tableTags.equals(tagSet)) {
-
-      } else {
-        syncSchema(connection, metric, tagSet);
+      Datapoint dp = new Datapoint(metric, tagm, timestamp, value);
+      dps.add(dp);
+      if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
+        num_buffered_pushes.set(0);
+        Map<String, DatapointBatch> batches = buffered_datapoint;
+        buffered_datapoint = new HashMap<String, DatapointBatch>();
+        return insertInternal(batches);
       }
+    }
+    return Deferred.fromResult(null);
+  }
 
-      final StringBuilder columns = new StringBuilder(100);
-      final StringBuilder values = new StringBuilder(20);
-      for (String key : keys) {
-        columns.append("[tag.");
-        columns.append(key);
-        columns.append("], ");
-        values.append("?,");
+  public Deferred<Object> insertInternal(Map<String, DatapointBatch> batches) {
+    // try (Connection connection = connectionPool.getConnection()) {
+    try (Connection connection = DriverManager.getConnection(connectionPool.getUrl())) {
+
+      for (Entry<String, DatapointBatch> entry : batches.entrySet()) {
+        SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
+        bulkCopy.setDestinationTableName("[" + entry.getKey() + "]");
+        bulkCopy.writeToServer(entry.getValue());
+        bulkCopy.close();
+        // for (Datapoint dp : dps) {
+        //   SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
+        //   final String[] keys = new String[dp.tagm.size()];
+        //   final Set<String> tagSet = dp.tagm.keySet();
+        //   tagSet.toArray(keys);
+
+        //   Set<String> tableTags;
+        //   synchronized(tables) {
+        //     tableTags = tables.get(dp.metric);
+        //   }
+        //   if (tableTags != null && tableTags.equals(tagSet)) {
+
+        //   } else {
+        //     syncSchema(connection, dp.metric, tagSet);
+        //   }
+
+        //   final StringBuilder columns = new StringBuilder(100);
+        //   final StringBuilder values = new StringBuilder(20);
+        //   for (String key : keys) {
+        //     columns.append("[tag.");
+        //     columns.append(key);
+        //     columns.append("], ");
+        //     values.append("?,");
+        //   }
+        //   columns.append("timestamp, value");
+        //   values.append(" ?, ?");
+
+        //   // TODO: prevent injection
+        //   String insert = String.format("INSERT INTO [dbo].[%s] (%s) VALUES (%s)", dp.metric, columns, values);
+        //   PreparedStatement prep = connection.prepareStatement(insert);
+        //   // stmt.setString(1, metric);
+
+        //   final int tagCount = dp.tagm.size();
+        //   for (int i = 0; i < tagCount; i++) {
+        //     prep.setString(i+1, dp.tagm.get(keys[i]));
+        //   }
+        //   prep.setTimestamp(tagCount+1, new Timestamp(dp.timestamp));
+        //   prep.setDouble(tagCount+2, dp.value);
+        //   prep.executeUpdate();
+        //   // stmt.setDate(request.t
+        //   // Statement stmt = connection.createStatement();
+        // }
+
       }
-      columns.append("timestamp, value");
-      values.append(" ?, ?");
-
-      // TODO: prevent injection
-      String insert = String.format("INSERT INTO [dbo].[%s] (%s) VALUES (%s)", metric, columns, values);
-      PreparedStatement prep = connection.prepareStatement(insert);
-      // stmt.setString(1, metric);
-
-      final int tagCount = tagm.size();
-      for (int i = 0; i < tagCount; i++) {
-        prep.setString(i+1, tagm.get(keys[i]));
-      }
-      prep.setTimestamp(tagCount+1, new Timestamp(timestamp));
-      prep.setDouble(tagCount+2, value);
-      prep.executeUpdate();
-      // stmt.setDate(request.t
-      // Statement stmt = connection.createStatement();
-
-    } catch (SQLException e) {
+    } catch (Exception e) {
       return Deferred.fromError(e);
     }
     return Deferred.fromResult(null);
