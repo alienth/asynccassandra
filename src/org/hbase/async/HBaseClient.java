@@ -5,6 +5,7 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,7 +27,9 @@ import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
 
 import com.microsoft.sqlserver.jdbc.*;
+
 import java.sql.*;
+
 import org.apache.commons.dbcp2.*;
 
 public class HBaseClient {
@@ -139,7 +142,7 @@ public class HBaseClient {
 
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
-  public Deferred<Object> insert(final String metric, final long timestamp, Map<String, String> tagm, final float value) {
+  public Deferred<Object> insert(final String metric, Map<String, String> tagm, final byte[] value) {
     // String key = new String(request.key(), CHARSET);
     // synchronized (buffered_lpush) {
     //   List<byte[]> lpushes = buffered_lpush.get(key);
@@ -156,30 +159,91 @@ public class HBaseClient {
     //   }
     // }
 
+
     try (Connection connection = connectionPool.getConnection()) {
+
+      final String[] keys = new String[tagm.size()];
+      final Set<String> tagSet = tagm.keySet();
+      tagSet.toArray(keys);
+
+
+      Statement stmt;
+      DatabaseMetaData md = connection.getMetaData();
+      ResultSet rs = md.getTables(null, "dbo", metric, new String[] {"TABLE"});
+      if (!rs.next()) {
+        final StringBuilder columnDefs = new StringBuilder(100);
+        for (String key : keys) {
+          columnDefs.append("[tag.");
+          columnDefs.append(key);
+          columnDefs.append("] nvarchar(100) NULL,");
+        }
+        // columnDefs.setLength(columnDefs.length() - 1); // strip last comma
+
+        String create = String.format("CREATE TABLE [dbo].[%s] (%s date date NOT NULL, time time NOT NULL, value float NOT NULL);", metric, columnDefs);
+
+        stmt = connection.createStatement();
+        stmt.executeUpdate(create);
+      } else {
+        rs = md.getColumns(null, null, metric, "tag.%");
+        // stmt = connection.createStatement();
+        // String query = String.format("select * from [dbo].[%s] LIMIT 1");
+        
+        final Set<String> columnSet = new HashSet<String>();
+        while (rs.next()) {
+          ResultSetMetaData rsMeta = rs.getMetaData();
+          for (int i = 1; i <= rsMeta.getColumnCount(); i++) {
+            String name = rs.getString(i);
+            LOG.warn(name);
+            LOG.warn(rsMeta.getColumnName(i));
+            if (name != null && name.startsWith("tag.")) {
+              columnSet.add(rs.getString(i).replaceFirst("^tag\\.", ""));
+            }
+          }
+        }
+
+        Set<String> foo = new HashSet<String>(tagSet);
+        LOG.warn(columnSet.toString());
+        LOG.warn(tagSet.toString());
+        foo.removeAll(columnSet);
+        
+        if (foo.size() > 0) {
+          final StringBuilder alter = new StringBuilder(200);
+          alter.append(String.format("ALTER TABLE [dbo].[%s] ADD ", metric));
+          for (String column : foo) {
+            alter.append(String.format(" [tag.%s] nvarchar(100) NULL,", column));
+          }
+          alter.setLength(alter.length() - 1);
+          stmt = connection.createStatement();
+          LOG.warn(alter.toString());
+          stmt.executeUpdate(alter.toString());
+
+        }
+        
+
+      }
+
       final StringBuilder columns = new StringBuilder(100);
       final StringBuilder values = new StringBuilder(20);
-      final String[] keys = new String[tagm.size()];
-      tagm.keySet().toArray(keys);
       for (String key : keys) {
+        columns.append("[tag.");
         columns.append(key);
-        columns.append(", ");
+        columns.append("], ");
         values.append("?,");
       }
 
       // TODO: prevent injection
       String insert = String.format("INSERT INTO [dbo].[%s] (%s date, time, value) VALUES (%s ?, ?, ?)", metric, columns, values);
-      PreparedStatement stmt = connection.prepareStatement(insert);
+      PreparedStatement prep = connection.prepareStatement(insert);
       // stmt.setString(1, metric);
 
       final int tagCount = tagm.size();
       for (int i = 0; i < tagCount; i++) {
-        stmt.setString(i+1, tagm.get(keys[i]));
+        prep.setString(i+1, tagm.get(keys[i]));
       }
-      stmt.setDate(tagCount+1, new Date(timestamp));
-      stmt.setTime(tagCount+2, new Time(timestamp));
-      stmt.setFloat(tagCount+3, value);
-      stmt.executeUpdate();
+      prep.setDate(tagCount+1, new Date(timestamp));
+      prep.setTime(tagCount+2, new Time(timestamp));
+      prep.setFloat(tagCount+3, value);
+      prep.executeUpdate();
       // stmt.setDate(request.t
       // Statement stmt = connection.createStatement();
 
