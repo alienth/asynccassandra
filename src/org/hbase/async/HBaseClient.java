@@ -180,9 +180,12 @@ public class HBaseClient {
         columnDefs.append("timestamp datetime NOT NULL, value float NOT NULL");
 
         String create = String.format("CREATE TABLE [dbo].[%s] (%s);", metric, columnDefs);
+        String index = String.format("CREATE Clustered Columnstore Index [CCI_%s] ON [dbo].[%s];", metric, metric);
 
         stmt = connection.createStatement();
         stmt.executeUpdate(create);
+        stmt = connection.createStatement();
+        stmt.executeUpdate(index);
       } else {
         rs = md.getColumns(null, null, metric, "tag.%");
         // stmt = connection.createStatement();
