@@ -205,7 +205,7 @@ public class HBaseClient {
 
     public Object[] getRowData() throws SQLServerException {
       Datapoint dp = dps.get(cursor - 1);
-      Object[] results = new Object[2 + dp.tagm.size()];
+      Object[] results = new Object[2 + tags.size()];
       results[0] = new Double(dp.value);
       results[1] = new Timestamp(dp.timestamp);
       int i = 2;
