@@ -177,9 +177,9 @@ public class HBaseClient {
           columnDefs.append(key);
           columnDefs.append("] nvarchar(100) NULL,");
         }
-        // columnDefs.setLength(columnDefs.length() - 1); // strip last comma
+        columnDefs.append(" value varbinary(8) NOT NULL");
 
-        String create = String.format("CREATE TABLE [dbo].[%s] (%s date date NOT NULL, time time NOT NULL, value float NOT NULL);", metric, columnDefs);
+        String create = String.format("CREATE TABLE [dbo].[%s] (%s);", metric, columnDefs);
 
         stmt = connection.createStatement();
         stmt.executeUpdate(create);
@@ -230,9 +230,11 @@ public class HBaseClient {
         columns.append("], ");
         values.append("?,");
       }
+      columns.append("value");
+      values.append(" ?");
 
       // TODO: prevent injection
-      String insert = String.format("INSERT INTO [dbo].[%s] (%s date, time, value) VALUES (%s ?, ?, ?)", metric, columns, values);
+      String insert = String.format("INSERT INTO [dbo].[%s] (%s) VALUES (%s)", metric, columns, values);
       PreparedStatement prep = connection.prepareStatement(insert);
       // stmt.setString(1, metric);
 
@@ -240,9 +242,7 @@ public class HBaseClient {
       for (int i = 0; i < tagCount; i++) {
         prep.setString(i+1, tagm.get(keys[i]));
       }
-      prep.setDate(tagCount+1, new Date(timestamp));
-      prep.setTime(tagCount+2, new Time(timestamp));
-      prep.setFloat(tagCount+3, value);
+      prep.setBytes(tagCount+1, value);
       prep.executeUpdate();
       // stmt.setDate(request.t
       // Statement stmt = connection.createStatement();

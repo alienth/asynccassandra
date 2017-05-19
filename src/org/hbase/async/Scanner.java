@@ -43,6 +43,8 @@ import com.stumbleupon.async.Deferred;
 
 import redis.clients.jedis.Jedis;
 
+import java.sql.*;
+
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
 
 /**
@@ -179,9 +181,14 @@ public final class Scanner implements Runnable {
     this.client = client;
     this.executor = executor;
     this.jedis = client.jedisPool.getResource();
+    try {
+    this.sql = client.connectionPool.getConnection();
+    } catch (SQLException ignored) {
+    }
   }
 
   Jedis jedis;
+  Connection sql;
 
   /**
    * Returns the row key this scanner is currently at.
@@ -654,6 +661,10 @@ public final class Scanner implements Runnable {
 //    }
 
     jedis.close();
+    try {
+    sql.close();
+    } catch (SQLException ignored) {
+    }
     return Deferred.fromResult(null);
   }
 
@@ -724,6 +735,8 @@ public final class Scanner implements Runnable {
       deferred.callback(rows);
       return;
     }
+
+    // String query = String.format("SELECT * from %s
 
     final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(results.size());
     for (byte[] value : results) {
