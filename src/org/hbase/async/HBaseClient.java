@@ -263,7 +263,22 @@ public class HBaseClient {
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
   public Deferred<Object> insert(final String metric, final Map<String, String> tagm, final long timestamp, final double value) {
-    // String key = new String(request.key(), CHARSET);
+    final String[] keys = new String[tagm.size()];
+    final Set<String> tagSet = tagm.keySet();
+    tagSet.toArray(keys);
+
+    Set<String> tableTags;
+    synchronized(tables) {
+      tableTags = tables.get(metric);
+    }
+    if (tableTags == null || ! tableTags.equals(tagSet)) {
+      try (Connection connection = connectionPool.getConnection()) {
+        syncSchema(connection, metric, tagSet);
+      } catch (SQLException e) {
+        return Deferred.fromError(e);
+      }
+    }
+
     synchronized (buffered_datapoint) {
       DatapointBatch dps = buffered_datapoint.get(metric);
       if (dps == null) {
@@ -298,19 +313,6 @@ public class HBaseClient {
         bulkCopy.close();
         // for (Datapoint dp : dps) {
         //   SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
-        //   final String[] keys = new String[dp.tagm.size()];
-        //   final Set<String> tagSet = dp.tagm.keySet();
-        //   tagSet.toArray(keys);
-
-        //   Set<String> tableTags;
-        //   synchronized(tables) {
-        //     tableTags = tables.get(dp.metric);
-        //   }
-        //   if (tableTags != null && tableTags.equals(tagSet)) {
-
-        //   } else {
-        //     syncSchema(connection, dp.metric, tagSet);
-        //   }
 
         //   final StringBuilder columns = new StringBuilder(100);
         //   final StringBuilder values = new StringBuilder(20);
