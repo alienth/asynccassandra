@@ -1,33 +1,21 @@
 package org.hbase.async;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.Map.Entry;
 import java.util.Set;
-import java.util.SortedMap;
-import java.util.SortedSet;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Deferred;
-
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.JedisPoolConfig;
 
 import com.microsoft.sqlserver.jdbc.*;
 
@@ -43,7 +31,6 @@ public class HBaseClient {
   /** A byte array containing a single zero byte.  */
   static final byte[] ZERO_ARRAY = new byte[] { 0 };
   
-  final JedisPool jedisPool;
   final BasicDataSource connectionPool;
   final Config config;
   final ExecutorService executor = Executors.newFixedThreadPool(25);
@@ -83,8 +70,6 @@ public class HBaseClient {
       throw new IllegalArgumentException(
           "Missing required config 'redis.server'");
     }
-    jedisPool = new JedisPool(new JedisPoolConfig(), config.getString("redis.server"));
-
     connectionPool = new BasicDataSource();
     connectionPool.setDriverClassName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
     connectionPool.setUrl(String.format("jdbc:sqlserver://%s;user=%s;password=%s", config.getString("sql.server"), config.getString("sql.user"), config.getString("sql.password")));
@@ -112,28 +97,8 @@ public class HBaseClient {
       }
     }
 
-    final TrimThread thread = new TrimThread();
-    thread.setDaemon(true);
-    thread.start();
   }
   
-  private static final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(1000000);
-
-  private static class MaxSizeHashMap<K, V> extends LinkedHashMap<K, V> {
-    private static final long serialVersionUID = 1L;
-    private final int maxSize;
-
-    public MaxSizeHashMap(int maxSize) {
-      this.maxSize = maxSize;
-    }
-
-    @Override
-    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
-      return size() > maxSize;
-    }
-  }
-
-
   private class Datapoint {
     public final String metric;
     public final Map<String, String> tagm;
@@ -257,10 +222,7 @@ public class HBaseClient {
   private HashMap<String, Set<String>> tables = new HashMap<String, Set<String>>();
 
   private Map<String, DatapointBatch> buffered_datapoint = new HashMap<String, DatapointBatch>();
-  private Map<String, List<byte[]>> buffered_lpush = new HashMap<String, List<byte[]>>();
   private final AtomicLong num_buffered_pushes = new AtomicLong();
-
-  private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
   public Deferred<Object> insert(final String metric, final Map<String, String> tagm, final long timestamp, final double value) {
     final Set<String> tagSet = tagm.keySet();
@@ -345,9 +307,7 @@ public class HBaseClient {
       }
     } else {
       rs = md.getColumns(null, null, metric, "tag.%");
-      // stmt = connection.createStatement();
-      // String query = String.format("select * from [dbo].[%s] LIMIT 1");
-      
+
       final Set<String> columnSet = new HashSet<String>();
       while (rs.next()) {
         ResultSetMetaData rsMeta = rs.getMetaData();
@@ -361,7 +321,7 @@ public class HBaseClient {
 
       Set<String> foo = new HashSet<String>(tags);
       foo.removeAll(columnSet);
-      
+
       if (foo.size() > 0) {
         final StringBuilder alter = new StringBuilder(200);
         alter.append(String.format("ALTER TABLE [dbo].[%s] ADD ", metric));
@@ -374,56 +334,15 @@ public class HBaseClient {
         stmt = connection.createStatement();
         LOG.warn(alter.toString());
         stmt.executeUpdate(alter.toString());
-
       }
       Set<String> foo2 = new HashSet<String>(tags);
       synchronized (tables) {
         tables.put(metric, foo2);
       }
-
     }
 
 
 
-  }
-
-  private Set<String> metrics = Collections.newSetFromMap(new ConcurrentHashMap<String,Boolean>());
-
-  private Deferred<Object> lpushInternal(Map<String, List<byte[]>> lpushes) {
-    try (Jedis jedis = jedisPool.getResource()) {
-      for (Entry<String, List<byte[]>> row : lpushes.entrySet()) {
-          final byte[][] values = new byte[row.getValue().size()][];
-          row.getValue().toArray(values);
-          jedis.lpush(row.getKey().getBytes(CHARSET), values);
-      }
-    } catch (Exception e) {
-        LOG.warn(e.toString());
-        return Deferred.fromError(e);
-    }
-
-    return Deferred.fromResult(null);
-  }
-
-  public Deferred<Object> hsetnx(final PutRequest request) {
-    synchronized (indexedKeys) {
-      byte[] check = new byte[request.key().length + request.value().length];
-      System.arraycopy(request.key(), 0, check, 0, request.key().length);
-      System.arraycopy(request.value(), 0, check, request.key().length, request.value().length);
-      if (indexedKeys.put(ByteBuffer.wrap(check), true) != null) {
-        // We already indexed this
-        return Deferred.fromResult(null);
-      }
-    }
-
-    metrics.add(new String(request.key(), CHARSET));
-
-    try (Jedis jedis = jedisPool.getResource()) {
-      jedis.hsetnx(request.key(), request.value(), ZERO_ARRAY);
-    } catch (Exception e) {
-      LOG.warn(e.toString());
-      return Deferred.fromError(e);
-    }
-    return Deferred.fromResult(null);
   }
 
   /**
@@ -442,7 +361,6 @@ public class HBaseClient {
   
   public Deferred<Object> shutdown() {
     try {
-      jedisPool.destroy();
       executor.shutdown();
     } catch (Exception e) {
       LOG.error("failed to close connection to redis", e);
@@ -469,38 +387,5 @@ public class HBaseClient {
     num_scans.incrementAndGet();
   }
   
-
-  final class TrimThread extends Thread {
-    public TrimThread() {
-      super("TrimThread");
-    }
-
-    @Override
-    public void run() {
-      while (true) {
-        for (String metricStr : metrics) {
-          final byte[] metric = metricStr.getBytes(CHARSET);
-          try (Jedis jedis = jedisPool.getResource()) {
-            Set<byte[]> tags = jedis.hkeys(metric);
-            for (byte[] tag : tags) {
-              byte[] key = new byte[metric.length + 1 + tag.length];
-              System.arraycopy(metric, 0, key, 0, metric.length);
-              System.arraycopy(tag, 0, key, metric.length + 1, tag.length);
-              jedis.ltrim(key, 0, 1000);
-            }
-          } catch (Exception e) {
-            LOG.error("Error while performing periodic ltrim: " + e);
-          }
-        }
-        try {
-          Thread.sleep(600000);
-        } catch (InterruptedException e) {
-            LOG.error("Trim thread interrupted", e);
-            return;
-        }
-      }
-    }
-
-  }
 
 }
