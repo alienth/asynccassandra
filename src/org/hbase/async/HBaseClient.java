@@ -263,21 +263,21 @@ public class HBaseClient {
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
   public Deferred<Object> insert(final String metric, final Map<String, String> tagm, final long timestamp, final double value) {
-    final String[] keys = new String[tagm.size()];
-    final Set<String> tagSet = tagm.keySet();
-    tagSet.toArray(keys);
+    // final String[] keys = new String[tagm.size()];
+    // final Set<String> tagSet = tagm.keySet();
+    // tagSet.toArray(keys);
 
-    Set<String> tableTags;
-    synchronized(tables) {
-      tableTags = tables.get(metric);
-    }
-    if (tableTags == null || ! tableTags.equals(tagSet)) {
-      try (Connection connection = connectionPool.getConnection()) {
-        syncSchema(connection, metric, tagSet);
-      } catch (SQLException e) {
-        return Deferred.fromError(e);
-      }
-    }
+    // Set<String> tableTags;
+    // synchronized(tables) {
+    //   tableTags = tables.get(metric);
+    // }
+    // if (tableTags == null || ! tableTags.equals(tagSet)) {
+    //   try (Connection connection = connectionPool.getConnection()) {
+    //     syncSchema(connection, metric, tagSet);
+    //   } catch (SQLException e) {
+    //     return Deferred.fromError(e);
+    //   }
+    // }
 
     synchronized (buffered_datapoint) {
       DatapointBatch dps = buffered_datapoint.get(metric);
