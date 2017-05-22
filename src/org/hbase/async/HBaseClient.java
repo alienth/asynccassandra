@@ -263,21 +263,20 @@ public class HBaseClient {
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
   public Deferred<Object> insert(final String metric, final Map<String, String> tagm, final long timestamp, final double value) {
-    // final String[] keys = new String[tagm.size()];
-    // final Set<String> tagSet = tagm.keySet();
-    // tagSet.toArray(keys);
+    final Set<String> tagSet = tagm.keySet();
 
-    // Set<String> tableTags;
-    // synchronized(tables) {
-    //   tableTags = tables.get(metric);
-    // }
-    // if (tableTags == null || ! tableTags.equals(tagSet)) {
-    //   try (Connection connection = connectionPool.getConnection()) {
-    //     syncSchema(connection, metric, tagSet);
-    //   } catch (SQLException e) {
-    //     return Deferred.fromError(e);
-    //   }
-    // }
+    Set<String> tableTags;
+    synchronized(tables) {
+      tableTags = tables.get(metric);
+    }
+    if (tableTags == null || ! tableTags.equals(tagSet)) {
+      try (Connection connection = connectionPool.getConnection()) {
+        LOG.warn("Syncing schema for metric " + metric);
+        syncSchema(connection, metric, tagSet);
+      } catch (SQLException e) {
+        return Deferred.fromError(e);
+      }
+    }
 
     synchronized (buffered_datapoint) {
       DatapointBatch dps = buffered_datapoint.get(metric);
@@ -311,36 +310,6 @@ public class HBaseClient {
         bulkCopy.setDestinationTableName("[" + entry.getKey() + "]");
         bulkCopy.writeToServer(entry.getValue());
         bulkCopy.close();
-        // for (Datapoint dp : dps) {
-        //   SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
-
-        //   final StringBuilder columns = new StringBuilder(100);
-        //   final StringBuilder values = new StringBuilder(20);
-        //   for (String key : keys) {
-        //     columns.append("[tag.");
-        //     columns.append(key);
-        //     columns.append("], ");
-        //     values.append("?,");
-        //   }
-        //   columns.append("timestamp, value");
-        //   values.append(" ?, ?");
-
-        //   // TODO: prevent injection
-        //   String insert = String.format("INSERT INTO [dbo].[%s] (%s) VALUES (%s)", dp.metric, columns, values);
-        //   PreparedStatement prep = connection.prepareStatement(insert);
-        //   // stmt.setString(1, metric);
-
-        //   final int tagCount = dp.tagm.size();
-        //   for (int i = 0; i < tagCount; i++) {
-        //     prep.setString(i+1, dp.tagm.get(keys[i]));
-        //   }
-        //   prep.setTimestamp(tagCount+1, new Timestamp(dp.timestamp));
-        //   prep.setDouble(tagCount+2, dp.value);
-        //   prep.executeUpdate();
-        //   // stmt.setDate(request.t
-        //   // Statement stmt = connection.createStatement();
-        // }
-
       }
     } catch (Exception e) {
       return Deferred.fromError(e);
