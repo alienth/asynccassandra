@@ -303,6 +303,10 @@ public class HBaseClient {
 
       Set<String> foo = new HashSet<String>(tags);
       synchronized (tables) {
+        Set<String> existing = tables.get(metric);
+        if (existing != null) {
+          foo.addAll(existing);
+        }
         tables.put(metric, foo);
       }
     } else {
@@ -337,6 +341,10 @@ public class HBaseClient {
       }
       Set<String> foo2 = new HashSet<String>(tags);
       synchronized (tables) {
+        Set<String> existing = tables.get(metric);
+        if (existing != null) {
+          foo2.addAll(existing);
+        }
         tables.put(metric, foo2);
       }
     }
