@@ -135,7 +135,9 @@ public class HBaseClient {
     private int cursor = 0;
 
     public void add(Datapoint d) {
-      dps.add(d);
+      if (dps.size() == 0) {
+        dps.add(d);
+      }
       for (String tag : d.tagm.keySet()) {
         if (!tags.contains(tag)) {
           tags.add(tag);
@@ -263,9 +265,9 @@ public class HBaseClient {
     // try (Connection connection = connectionPool.getConnection()) {
     try (Connection connection = DriverManager.getConnection(connectionPool.getUrl())) {
 
+      SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
       for (Entry<String, DatapointBatch> entry : batches.entrySet()) {
         LOG.warn("Pushing datapoints for " + entry.getKey());
-        SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
         bulkCopy.addColumnMapping("value", "value");
         bulkCopy.addColumnMapping("timestamp", "timestamp");
         for (String tag : entry.getValue().tags) {
@@ -273,8 +275,8 @@ public class HBaseClient {
         }
         bulkCopy.setDestinationTableName("[" + entry.getKey() + "]");
         bulkCopy.writeToServer(entry.getValue());
-        bulkCopy.close();
       }
+      bulkCopy.close();
     } catch (Exception e) {
       LOG.warn("Exception pushing batch: " + e);
     }
