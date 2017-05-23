@@ -240,6 +240,7 @@ public class HBaseClient {
       }
     }
 
+    Map<String, DatapointBatch> batches = null;
     synchronized (buffered_datapoint) {
       DatapointBatch dps = buffered_datapoint.get(metric);
       if (dps == null) {
@@ -250,10 +251,12 @@ public class HBaseClient {
       dps.add(dp);
       if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
         num_buffered_pushes.set(0);
-        Map<String, DatapointBatch> batches = buffered_datapoint;
+        batches = buffered_datapoint;
         buffered_datapoint = new HashMap<String, DatapointBatch>();
-        return insertInternal(batches);
       }
+    }
+    if (batches != null) {
+      return insertInternal(batches);
     }
     return Deferred.fromResult(null);
   }
