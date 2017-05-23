@@ -422,8 +422,9 @@ public class HBaseClient {
 
         Map<String, DatapointBatch> batches = null;
         synchronized (buffered_datapoint) {
-          batches = buffered_datapoint;
-          buffered_datapoint = new HashMap<String, DatapointBatch>();
+          batches = new HashMap<String, DatapointBatch>();
+          batches.putAll(buffered_datapoint);
+          buffered_datapoint.clear();
         }
         if (batches.size() > 0) {
           final long startTime = System.nanoTime();
