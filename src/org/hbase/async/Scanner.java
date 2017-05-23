@@ -41,8 +41,6 @@ import org.slf4j.LoggerFactory;
 
 import com.stumbleupon.async.Deferred;
 
-import redis.clients.jedis.Jedis;
-
 import java.sql.*;
 
 import static org.hbase.async.HBaseClient.EMPTY_ARRAY;
@@ -180,14 +178,12 @@ public final class Scanner implements Runnable {
   Scanner(final HBaseClient client, final ExecutorService executor) {
     this.client = client;
     this.executor = executor;
-    this.jedis = client.jedisPool.getResource();
     try {
     this.sql = client.connectionPool.getConnection();
     } catch (SQLException ignored) {
     }
   }
 
-  Jedis jedis;
   Connection sql;
 
   /**
@@ -660,7 +656,6 @@ public final class Scanner implements Runnable {
 //      scanner.close();
 //    }
 
-    jedis.close();
     try {
     sql.close();
     } catch (SQLException ignored) {
@@ -709,67 +704,67 @@ public final class Scanner implements Runnable {
   @Override
   public void run() {
 
-    try {
-    if (keys == null) {
-      buildKeys();
-      if (keys.size() == 0) {
-        // No matching rows, apparently
-        deferred.callback(null);
-        return;
-      }
-      iterator = keys.iterator();
-    }
-    if (!iterator.hasNext()) {
-      deferred.callback(null);
-      return;
-    }
-    final byte[] key = iterator.next();
-    final byte[] tags = Arrays.copyOfRange(key, metric.length + 1, key.length);
-    List<byte[]> results = null;
-    results = jedis.lrange(key, 0, 60 * 60 * 3);
+    // try {
+    // if (keys == null) {
+    //   buildKeys();
+    //   if (keys.size() == 0) {
+    //     // No matching rows, apparently
+    //     deferred.callback(null);
+    //     return;
+    //   }
+    //   iterator = keys.iterator();
+    // }
+    // if (!iterator.hasNext()) {
+    //   deferred.callback(null);
+    //   return;
+    // }
+    // final byte[] key = iterator.next();
+    // final byte[] tags = Arrays.copyOfRange(key, metric.length + 1, key.length);
+    // List<byte[]> results = null;
+    // results = jedis.lrange(key, 0, 60 * 60 * 3);
 
 
-    final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
+    // final ArrayList<ArrayList<KeyValue>> rows = new ArrayList<ArrayList<KeyValue>>();
 
-    if (results.size() == 0) {
-      deferred.callback(rows);
-      return;
-    }
+    // if (results.size() == 0) {
+    //   deferred.callback(rows);
+    //   return;
+    // }
 
-    // String query = String.format("SELECT * from %s
+    // // String query = String.format("SELECT * from %s
 
-    final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(results.size());
-    for (byte[] value : results) {
-        int ts = Bytes.getInt(value, 0);
-        if (ts < start_ts || ts > stop_ts) {
-          continue;
-        }
-        short flags = Bytes.getShort(value, 4);
-        int offset = (ts % MAX_TIMESPAN);
-        int base_time = ts - offset;
+    // final ArrayList<KeyValue> kvs = new ArrayList<KeyValue>(results.size());
+    // for (byte[] value : results) {
+    //     int ts = Bytes.getInt(value, 0);
+    //     if (ts < start_ts || ts > stop_ts) {
+    //       continue;
+    //     }
+    //     short flags = Bytes.getShort(value, 4);
+    //     int offset = (ts % MAX_TIMESPAN);
+    //     int base_time = ts - offset;
 
-        byte[] new_key = new byte[key.length + 4];
-        System.arraycopy(key, 0, new_key, 0, metric.length);
-        Bytes.setInt(new_key, base_time, metric.length + 1);
-        System.arraycopy(tags, 0, new_key, metric.length + 5, tags.length);
+    //     byte[] new_key = new byte[key.length + 4];
+    //     System.arraycopy(key, 0, new_key, 0, metric.length);
+    //     Bytes.setInt(new_key, base_time, metric.length + 1);
+    //     System.arraycopy(tags, 0, new_key, metric.length + 5, tags.length);
 
-        offset = offset << 10;
-        offset |= flags;
+    //     offset = offset << 10;
+    //     offset |= flags;
 
-        byte[] new_qual = Bytes.fromInt(offset);
+    //     byte[] new_qual = Bytes.fromInt(offset);
 
-        byte[] new_value = Arrays.copyOfRange(value, 6, value.length);
+    //     byte[] new_value = Arrays.copyOfRange(value, 6, value.length);
 
-        final KeyValue kv = new KeyValue(new_key, null, new_qual, (long) ts, new_value);
-        kvs.add(kv);
-    }
-    if (kvs.size() > 0) {
-      rows.add(kvs);
-    }
-    deferred.callback(rows);
-    } catch (Exception e) {
-      deferred.callback(e);
-    }
+    //     final KeyValue kv = new KeyValue(new_key, null, new_qual, (long) ts, new_value);
+    //     kvs.add(kv);
+    // }
+    // if (kvs.size() > 0) {
+    //   rows.add(kvs);
+    // }
+    // deferred.callback(rows);
+    // } catch (Exception e) {
+      // deferred.callback(e);
+    // }
   }
 
   private byte[] metric;
@@ -779,28 +774,28 @@ public final class Scanner implements Runnable {
   private static final int MAX_TIMESPAN = 2419200;
 
   private void buildKeys() {
-    keys = new ArrayList<byte[]>();
+    // keys = new ArrayList<byte[]>();
 
-    Set<byte[]> rows = jedis.hkeys(metric);
+    // Set<byte[]> rows = jedis.hkeys(metric);
     
-    int keyCount = 0;
-    for (byte[] row : rows) {
-      byte[] fake_key = new byte[metric.length + 1 + 4 + row.length]; // timestamp + delim
-      System.arraycopy(row, 0, fake_key, metric.length + 1 + 4, fake_key.length - metric.length - 1 - 4);
-      if (filter != null) {
-        final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
-        if (!regex.matches(fake_key)) {
-          continue;
-        }
-      }
-      byte[] key = new byte[metric.length + 1 + row.length];
-      System.arraycopy(metric, 0, key, 0, metric.length);
-      System.arraycopy(row, 0, key, metric.length + 1, row.length);
+    // int keyCount = 0;
+    // for (byte[] row : rows) {
+    //   byte[] fake_key = new byte[metric.length + 1 + 4 + row.length]; // timestamp + delim
+    //   System.arraycopy(row, 0, fake_key, metric.length + 1 + 4, fake_key.length - metric.length - 1 - 4);
+    //   if (filter != null) {
+    //     final KeyRegexpFilter regex = (KeyRegexpFilter)filter;
+    //     if (!regex.matches(fake_key)) {
+    //       continue;
+    //     }
+    //   }
+    //   byte[] key = new byte[metric.length + 1 + row.length];
+    //   System.arraycopy(metric, 0, key, 0, metric.length);
+    //   System.arraycopy(row, 0, key, metric.length + 1, row.length);
 
-      keys.add(key);
-      keyCount++;
-    }
-    LOG.warn("I'll be fetching " + keyCount + " keys.");
+    //   keys.add(key);
+    //   keyCount++;
+    // }
+    // LOG.warn("I'll be fetching " + keyCount + " keys.");
   }
 
 
