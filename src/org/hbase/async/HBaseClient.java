@@ -135,7 +135,7 @@ public class HBaseClient {
     private int cursor = 0;
 
     public void add(Datapoint d) {
-      if (dps.size() == 0) {
+      if (dps.size() == 0) { // TESTING - TODO remove me
         dps.add(d);
       }
       for (String tag : d.tagm.keySet()) {
@@ -275,6 +275,7 @@ public class HBaseClient {
         }
         bulkCopy.setDestinationTableName("[" + entry.getKey() + "]");
         bulkCopy.writeToServer(entry.getValue());
+        bulkCopy.clearColumnMappings();
       }
       bulkCopy.close();
     } catch (Exception e) {
