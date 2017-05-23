@@ -429,7 +429,7 @@ public class HBaseClient {
           final long startTime = System.nanoTime();
           insertInternal(batches);
           final long duration = System.nanoTime() - startTime;
-          LOG.warn("It took " + duration / 1000 / 1000 + " seconds to push a metric batch.");
+          LOG.warn("It took " + duration / 1000 / 1000 / 1000 + " seconds to push a metric batch.");
         }
 
         try {
