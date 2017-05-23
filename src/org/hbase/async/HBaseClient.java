@@ -135,9 +135,7 @@ public class HBaseClient {
     private int cursor = 0;
 
     public void add(Datapoint d) {
-      if (dps.size() == 0) { // TESTING - TODO remove me
-        dps.add(d);
-      }
+      dps.add(d);
       for (String tag : d.tagm.keySet()) {
         if (!tags.contains(tag)) {
           tags.add(tag);
@@ -262,22 +260,56 @@ public class HBaseClient {
   }
 
   public void insertInternal(Map<String, DatapointBatch> batches) {
-    // try (Connection connection = connectionPool.getConnection()) {
-    try (Connection connection = DriverManager.getConnection(connectionPool.getUrl())) {
+    // try (Connection connection = DriverManager.getConnection(connectionPool.getUrl())) {
+    try (Connection connection = connectionPool.getConnection()) {
 
-      SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
+      // SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
       for (Entry<String, DatapointBatch> entry : batches.entrySet()) {
-        LOG.warn("Pushing datapoints for " + entry.getKey());
-        bulkCopy.addColumnMapping("value", "value");
-        bulkCopy.addColumnMapping("timestamp", "timestamp");
-        for (String tag : entry.getValue().tags) {
-          bulkCopy.addColumnMapping(tag, "tag." + tag);
-        }
-        bulkCopy.setDestinationTableName("[" + entry.getKey() + "]");
-        bulkCopy.writeToServer(entry.getValue());
-        bulkCopy.clearColumnMappings();
-      }
-      bulkCopy.close();
+
+				for (Datapoint dp : entry.getValue().dps) {
+					final StringBuilder columns = new StringBuilder(100);
+					final StringBuilder values = new StringBuilder(20);
+          final String[] tagKeys = new String[dp.tagm.size()];
+          dp.tagm.keySet().toArray(tagKeys);
+					for (String key : tagKeys) {
+						columns.append("[tag.");
+						columns.append(key);
+						columns.append("], ");
+						values.append("?,");
+					}
+					columns.append("timestamp, value");
+					values.append(" ?, ?");
+
+					// TODO: prevent injection
+					String insert = String.format("INSERT INTO [dbo].[%s] (%s) VALUES (%s)", dp.metric, columns, values);
+					PreparedStatement prep = connection.prepareStatement(insert);
+					// stmt.setString(1, metric);
+
+					final int tagCount = dp.tagm.size();
+					for (int i = 0; i < tagCount; i++) {
+						prep.setString(i+1, dp.tagm.get(tagKeys[i]));
+					}
+					prep.setTimestamp(tagCount+1, new Timestamp(dp.timestamp));
+					prep.setDouble(tagCount+2, dp.value);
+					prep.executeUpdate();
+					// stmt.setDate(request.t
+					// Statement stmt = connection.createStatement();
+				}
+			}
+
+
+
+        // LOG.warn("Pushing datapoints for " + entry.getKey());
+        // bulkCopy.addColumnMapping("value", "value");
+        // bulkCopy.addColumnMapping("timestamp", "timestamp");
+        // for (String tag : entry.getValue().tags) {
+        //   bulkCopy.addColumnMapping(tag, "tag." + tag);
+        // }
+        // bulkCopy.setDestinationTableName("[" + entry.getKey() + "]");
+        // bulkCopy.writeToServer(entry.getValue());
+        // bulkCopy.clearColumnMappings();
+      // }
+      // bulkCopy.close();
     } catch (Exception e) {
       LOG.warn("Exception pushing batch: " + e);
     }
