@@ -97,6 +97,9 @@ public class HBaseClient {
       }
     }
 
+    final BatchThread thread = new BatchThread();
+    thread.setDaemon(true);
+    thread.start();
   }
   
   private class Datapoint {
@@ -233,14 +236,13 @@ public class HBaseClient {
     }
     if (tableTags == null || ! tableTags.containsAll(tagSet)) {
       try (Connection connection = connectionPool.getConnection()) {
-        LOG.warn("Syncing schema for metric " + metric);
+        // LOG.warn("Syncing schema for metric " + metric);
         syncSchema(connection, metric, tagSet);
       } catch (SQLException e) {
         return Deferred.fromError(e);
       }
     }
 
-    Map<String, DatapointBatch> batches = null;
     synchronized (buffered_datapoint) {
       DatapointBatch dps = buffered_datapoint.get(metric);
       if (dps == null) {
@@ -251,21 +253,18 @@ public class HBaseClient {
       dps.add(dp);
       if (num_buffered_pushes.incrementAndGet() >= config.getInt("hbase.rpcs.batch.size")) {
         num_buffered_pushes.set(0);
-        batches = buffered_datapoint;
-        buffered_datapoint = new HashMap<String, DatapointBatch>();
+        // TODO - Trigger the batch thread to immediately wake?
       }
-    }
-    if (batches != null) {
-      return insertInternal(batches);
     }
     return Deferred.fromResult(null);
   }
 
-  public Deferred<Object> insertInternal(Map<String, DatapointBatch> batches) {
+  public void insertInternal(Map<String, DatapointBatch> batches) {
     // try (Connection connection = connectionPool.getConnection()) {
     try (Connection connection = DriverManager.getConnection(connectionPool.getUrl())) {
 
       for (Entry<String, DatapointBatch> entry : batches.entrySet()) {
+        LOG.warn("Pushing datapoints for " + entry.getKey());
         SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
         bulkCopy.addColumnMapping("value", "value");
         bulkCopy.addColumnMapping("timestamp", "timestamp");
@@ -277,9 +276,8 @@ public class HBaseClient {
         bulkCopy.close();
       }
     } catch (Exception e) {
-      return Deferred.fromError(e);
+      LOG.warn("Exception pushing batch: " + e);
     }
-    return Deferred.fromResult(null);
   }
 
   public void syncSchema(Connection connection, String metric, Set<String> tags) throws SQLException {
@@ -398,5 +396,51 @@ public class HBaseClient {
     num_scans.incrementAndGet();
   }
   
+
+  final class BatchThread extends Thread {
+    public BatchThread() {
+      super("BatchThread");
+    }
+
+    @Override
+    public void run() {
+      while (true) {
+        // for (String metricStr : metrics) {
+        //   final byte[] metric = metricStr.getBytes(CHARSET);
+        //   try (Jedis jedis = jedisPool.getResource()) {
+        //     Set<byte[]> tags = jedis.hkeys(metric);
+        //     for (byte[] tag : tags) {
+        //       byte[] key = new byte[metric.length + 1 + tag.length];
+        //       System.arraycopy(metric, 0, key, 0, metric.length);
+        //       System.arraycopy(tag, 0, key, metric.length + 1, tag.length);
+        //       jedis.ltrim(key, 0, 1000);
+        //     }
+        //   } catch (Exception e) {
+        //     LOG.error("Error while performing periodic ltrim: " + e);
+        //   }
+        // }
+
+        Map<String, DatapointBatch> batches = null;
+        synchronized (buffered_datapoint) {
+          batches = buffered_datapoint;
+          buffered_datapoint = new HashMap<String, DatapointBatch>();
+        }
+        if (batches.size() > 0) {
+          final long startTime = System.nanoTime();
+          insertInternal(batches);
+          final long duration = System.nanoTime() - startTime;
+          LOG.warn("It took " + duration / 1000 / 1000 + " seconds to push a metric batch.");
+        }
+
+        try {
+          Thread.sleep(3000);
+        } catch (InterruptedException e) {
+            LOG.error("Trim thread interrupted", e);
+            return;
+        }
+      }
+    }
+
+  }
 
 }
