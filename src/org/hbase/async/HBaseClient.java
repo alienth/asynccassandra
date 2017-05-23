@@ -231,7 +231,7 @@ public class HBaseClient {
     synchronized(tables) {
       tableTags = tables.get(metric);
     }
-    if (tableTags == null || ! tableTags.equals(tagSet)) {
+    if (tableTags == null || ! tableTags.containsAll(tagSet)) {
       try (Connection connection = connectionPool.getConnection()) {
         LOG.warn("Syncing schema for metric " + metric);
         syncSchema(connection, metric, tagSet);
